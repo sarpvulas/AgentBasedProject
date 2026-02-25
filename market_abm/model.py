@@ -1,4 +1,4 @@
-"""MarketModel — orchestrator for the heterogeneous-agent financial market ABM."""
+"""MarketModel — single-asset LOB market with heterogeneous agents."""
 
 from collections import Counter
 
@@ -6,162 +6,154 @@ import agentpy as ap
 import numpy as np
 from scipy.stats import jarque_bera, kurtosis as sp_kurtosis
 
-from .agents import Strategy, Trader
+from .agents import AgentType, Trader
+from .analytics import compute_portfolio_metrics
 from .config import DEFAULT_PARAMS
 from .fundamental import FundamentalProcess
-from .market_maker import MarketMaker
-from .strategy_switching import (
-    compute_exponential_ma_fitness,
-    compute_strategy_fitness,
-    multinomial_logit_probabilities,
-    switch_strategies,
-)
+from .order_book import OrderBook
 
 
 class MarketModel(ap.Model):
-    """Heterogeneous-agent single-asset financial market model.
+    """Single-asset market where agents trade through a limit order book.
 
     Simulation loop per step:
-      1. Evolve fundamental value
-      2. Each trader computes demand based on current strategy
-      3. Market maker updates price from aggregate demand
-      4. Compute strategy fitness & EMA
-      5. Strategy switching via multinomial logit
+      1. Evolve fundamental value (O-U process)
+      2. Shuffle agents (random arrival order)
+      3. Each agent decides buy/sell/hold and submits orders
+      4. Trades settle immediately (cash and inventory transfer)
+      5. Cancel stale limit orders
       6. Record observables
     """
 
     def setup(self):
-        # Merge defaults with user-supplied parameters
         for key, val in DEFAULT_PARAMS.items():
             if key not in self.p:
                 self.p[key] = val
 
-        # Random generator (seeded via agentpy's self.random)
         seed = self.p.get('seed', None)
         self.rng = np.random.default_rng(seed)
 
-        # Fundamental value process
         self.fundamental = FundamentalProcess(
             initial_value=self.p['fundamental_initial'],
-            drift=self.p['fundamental_drift'],
-            volatility=self.p['fundamental_volatility'],
+            kappa=self.p['kappa'],
+            mu=self.p['mu'],
+            sigma=self.p['fundamental_sigma'],
             rng=self.rng,
         )
 
-        # Market maker
-        self.market_maker = MarketMaker(
-            initial_price=self.p['price_initial'],
-            lambda_mm=self.p['lambda_mm'],
-            noise_sigma=self.p['mm_noise_sigma'],
-            gamma=self.p.get('gamma', 0.0),
-            rng=self.rng,
+        self.order_book = OrderBook(
+            initial_price=self.p['fundamental_initial']
         )
 
-        # Traders
         self.traders = ap.AgentList(self, self.p['n_agents'], Trader)
-        self._assign_initial_strategies()
-
-        # EMA fitness state
-        self.ema_fitness = {s: 0.0 for s in Strategy}
-
-        # Intervention schedule: {step_number: pct_change}
+        self._assign_types()
+        self._agent_lookup = {t.id: t for t in self.traders}
+        self._prev_price = self.p['fundamental_initial']
         self._interventions: dict[int, float] = {}
 
-        # Previous state for fitness computation
-        self._prev_price = self.market_maker.price
-        self._prev_fundamental = self.fundamental.value
-
-    def _assign_initial_strategies(self):
-        """Assign strategies to traders based on initial fraction parameters."""
+    def _assign_types(self):
         n = self.p['n_agents']
-        n_fund = int(n * self.p['init_fundamentalist_frac'])
-        n_chart = int(n * self.p['init_chartist_frac'])
-        n_noise = n - n_fund - n_chart
+        n_fund = int(n * self.p['frac_fundamental'])
+        n_trend = int(n * self.p['frac_trend'])
+        n_noise = n - n_fund - n_trend
 
-        strategies = (
-            [Strategy.FUNDAMENTALIST] * n_fund
-            + [Strategy.CHARTIST] * n_chart
-            + [Strategy.NOISE] * n_noise
+        types = (
+            [AgentType.FUNDAMENTAL] * n_fund
+            + [AgentType.TREND] * n_trend
+            + [AgentType.NOISE] * n_noise
         )
-        self.rng.shuffle(strategies)
-        for trader, strat in zip(self.traders, strategies):
-            trader.strategy = strat
+        self.rng.shuffle(types)
+        for trader, atype in zip(self.traders, types):
+            trader.agent_type = atype
 
     def step(self):
-        """Execute one simulation step."""
-        # Save previous state
-        self._prev_price = self.market_maker.price
-        self._prev_fundamental = self.fundamental.value
+        self._prev_price = (self.order_book.last_trade_price
+                            or self._prev_price)
 
         # 1. Evolve fundamental
         self.fundamental.step()
+        if self.t in self._interventions:
+            self.fundamental.apply_shock(self._interventions[self.t])
 
-        # 1b. Apply scheduled intervention
-        current_step = self.t
-        if current_step in self._interventions:
-            self.fundamental.apply_shock(self._interventions[current_step])
-
-        # 2. Compute demands
-        price = self.market_maker.price
+        # 2. Market state
+        price = (self.order_book.last_trade_price
+                 or self.p['fundamental_initial'])
+        prev_price = self._prev_price
         fundamental = self.fundamental.value
-        past_returns = self.market_maker.get_past_returns(self.p['chartist_memory'])
+        best_bid = self.order_book.best_bid
+        best_ask = self.order_book.best_ask
 
-        demands = []
-        for trader in self.traders:
-            d = trader.compute_demand(price, fundamental, past_returns)
-            demands.append(d)
+        # 3. Shuffle agents
+        agent_order = list(self.traders)
+        self.rng.shuffle(agent_order)
 
-        aggregate_demand = sum(demands)
+        # 4. Agent decisions
+        for trader in agent_order:
+            order = trader.decide(price, prev_price, fundamental,
+                                  best_bid, best_ask, self.t, self.rng)
+            if order is not None:
+                trade = self.order_book.submit_order(order)
+                if trade is not None:
+                    self._settle_trade(trade)
+                    best_bid = self.order_book.best_bid
+                    best_ask = self.order_book.best_ask
 
-        # 3. Market maker updates price (with endogenous volatility)
-        chartist_frac = sum(1 for t in self.traders if t.strategy == Strategy.CHARTIST) / self.p['n_agents']
-        self.market_maker.update_price(aggregate_demand, self.p['n_agents'],
-                                       chartist_frac=chartist_frac)
+        # 5. Cleanup
+        self.order_book.cancel_stale_orders(
+            self.t, self.p['stale_order_age'])
 
-        # 4. Fitness & EMA
-        new_past_returns = self.market_maker.get_past_returns(self.p['chartist_memory'])
-        raw_fitness = compute_strategy_fitness(
-            price=self.market_maker.price,
-            prev_price=self._prev_price,
-            fundamental=fundamental,
-            prev_fundamental=self._prev_fundamental,
-            past_returns=new_past_returns,
-            params=dict(self.p),
-        )
-        self.ema_fitness = compute_exponential_ma_fitness(
-            raw_fitness, self.ema_fitness, self.p['fitness_ema_alpha']
-        )
+        # 6. End step
+        self.order_book.end_step()
 
-        # 5. Strategy switching with herding
-        if current_step % self.p['switching_interval'] == 0:
-            counts = Counter(t.strategy for t in self.traders)
-            n = self.p['n_agents']
-            fractions = {s: counts.get(s, 0) / n for s in Strategy}
-            probs = multinomial_logit_probabilities(
-                self.ema_fitness, self.p['beta'],
-                fractions=fractions,
-                herding=self.p.get('herding', 0.0),
-            )
-            switch_strategies(list(self.traders), probs, self.rng,
-                             switch_prob=self.p.get('switch_prob', 0.1))
+    def _settle_trade(self, trade):
+        buyer = self._agent_lookup[trade.buyer_id]
+        seller = self._agent_lookup[trade.seller_id]
+        buyer.cash -= trade.price
+        seller.cash += trade.price
+        buyer.inventory += 1
+        seller.inventory -= 1
 
     def update(self):
-        """Record observables after each step."""
-        # Strategy fractions
-        counts = Counter(t.strategy for t in self.traders)
-        n = self.p['n_agents']
+        price = (self.order_book.last_trade_price or self._prev_price)
 
-        self.record('price', self.market_maker.price)
+        self.record('price', price)
         self.record('fundamental', self.fundamental.value)
-        self.record('log_return', self.market_maker.return_history[-1]
-                     if self.market_maker.return_history else 0.0)
-        self.record('frac_fundamentalist', counts.get(Strategy.FUNDAMENTALIST, 0) / n)
-        self.record('frac_chartist', counts.get(Strategy.CHARTIST, 0) / n)
-        self.record('frac_noise', counts.get(Strategy.NOISE, 0) / n)
+
+        if self._prev_price > 0 and price > 0:
+            self.record('log_return', np.log(price / self._prev_price))
+        else:
+            self.record('log_return', 0.0)
+
+        self.record('best_bid', self.order_book.best_bid or 0.0)
+        self.record('best_ask', self.order_book.best_ask or 0.0)
+        self.record('spread', self.order_book.spread or 0.0)
+        self.record('volume',
+                     self.order_book.volume_history[-1]
+                     if self.order_book.volume_history else 0)
+
+        counts = Counter(t.agent_type for t in self.traders)
+        n = self.p['n_agents']
+        self.record('frac_fundamental',
+                     counts.get(AgentType.FUNDAMENTAL, 0) / n)
+        self.record('frac_trend', counts.get(AgentType.TREND, 0) / n)
+        self.record('frac_noise', counts.get(AgentType.NOISE, 0) / n)
+
+        for atype in AgentType:
+            typed = [t for t in self.traders if t.agent_type == atype]
+            if typed:
+                mean_w = np.mean([t.cash + t.inventory * price
+                                  for t in typed])
+            else:
+                mean_w = 0.0
+            self.record(f'wealth_{atype.name.lower()}', mean_w)
 
     def end(self):
-        """Compute and report summary statistics."""
-        returns = np.array(self.market_maker.return_history)
+        prices = [p for p in self.order_book.price_history
+                  if p is not None]
+        if len(prices) < 10:
+            return
+
+        returns = np.diff(np.log(prices))
         if len(returns) < 10:
             return
 
@@ -175,16 +167,21 @@ class MarketModel(ap.Model):
         self.report('std_return', float(np.std(returns)))
         self.report('n_steps', len(returns))
 
-    def schedule_intervention(self, step: int, pct_change: float):
-        """Schedule a shock to the fundamental value at a given step.
+        valid_spreads = [s for s in self.order_book.spread_history
+                         if s is not None]
+        if valid_spreads:
+            self.report('mean_spread', float(np.mean(valid_spreads)))
 
-        Parameters
-        ----------
-        step : int
-            The simulation step at which to apply the shock.
-        pct_change : float
-            Fractional change, e.g. -0.10 for a 10% drop.
-        """
+        last_price = (self.order_book.last_trade_price
+                      or self.p['fundamental_initial'])
+        for atype in AgentType:
+            metrics = compute_portfolio_metrics(
+                list(self.traders), atype, last_price)
+            name = atype.name.lower()
+            self.report(f'{name}_mean_pnl', metrics['mean_pnl'])
+            self.report(f'{name}_sharpe', metrics['sharpe'])
+
+    def schedule_intervention(self, step: int, pct_change: float):
         if not hasattr(self, '_interventions'):
             self._interventions = {}
         self._interventions[step] = pct_change
