@@ -129,3 +129,29 @@ def validate_stylized_facts(returns: np.ndarray, nlags: int = 20) -> dict:
     }
 
     return results
+
+
+def compute_portfolio_metrics(agents, agent_type, last_price: float) -> dict:
+    """Compute wealth, PnL, and Sharpe for agents of a given type."""
+    typed = [a for a in agents if a.agent_type == agent_type]
+    if not typed:
+        return {'mean_pnl': 0.0, 'std_pnl': 0.0, 'sharpe': 0.0,
+                'mean_wealth': 0.0, 'n': 0}
+
+    pnls = np.array([
+        (a.cash + a.inventory * last_price) - a.initial_wealth
+        for a in typed
+    ])
+    mean_pnl = float(np.mean(pnls))
+    std_pnl = float(np.std(pnls))
+    sharpe = mean_pnl / std_pnl if std_pnl > 0 else 0.0
+
+    return {
+        'mean_pnl': mean_pnl,
+        'std_pnl': std_pnl,
+        'sharpe': sharpe,
+        'mean_wealth': float(np.mean([
+            a.cash + a.inventory * last_price for a in typed
+        ])),
+        'n': len(typed),
+    }

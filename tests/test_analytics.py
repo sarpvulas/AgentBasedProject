@@ -93,3 +93,43 @@ class TestValidateStylizedFacts:
         for fact, info in results.items():
             assert 'passed' in info
             assert isinstance(info['passed'], bool)
+
+
+from market_abm.agents import AgentType
+from market_abm.analytics import compute_portfolio_metrics
+
+
+class _MockAgent:
+    def __init__(self, agent_type, cash, inventory, initial_wealth):
+        self.agent_type = agent_type
+        self.cash = cash
+        self.inventory = inventory
+        self.initial_wealth = initial_wealth
+
+
+class TestPortfolioMetrics:
+    def test_zero_pnl_at_start(self):
+        agents = [_MockAgent(AgentType.NOISE, 10000.0, 10, 11000.0)
+                  for _ in range(5)]
+        result = compute_portfolio_metrics(agents, AgentType.NOISE, 100.0)
+        assert result['mean_pnl'] == pytest.approx(0.0)
+        assert result['n'] == 5
+
+    def test_positive_pnl_when_price_rises(self):
+        agents = [_MockAgent(AgentType.FUNDAMENTAL, 9900.0, 11, 11000.0)]
+        result = compute_portfolio_metrics(agents, AgentType.FUNDAMENTAL, 110.0)
+        assert result['mean_pnl'] == pytest.approx(110.0)
+
+    def test_empty_type_returns_zeros(self):
+        agents = [_MockAgent(AgentType.NOISE, 10000.0, 10, 11000.0)]
+        result = compute_portfolio_metrics(agents, AgentType.TREND, 100.0)
+        assert result['n'] == 0
+        assert result['mean_pnl'] == 0.0
+
+    def test_sharpe_zero_when_symmetric(self):
+        agents = [
+            _MockAgent(AgentType.NOISE, 10100.0, 10, 11000.0),
+            _MockAgent(AgentType.NOISE, 9900.0, 10, 11000.0),
+        ]
+        result = compute_portfolio_metrics(agents, AgentType.NOISE, 100.0)
+        assert result['sharpe'] == pytest.approx(0.0)
