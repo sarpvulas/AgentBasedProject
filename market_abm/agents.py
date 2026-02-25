@@ -14,9 +14,6 @@ class AgentType(Enum):
     NOISE = auto()
 
 
-# Backward-compatible alias for modules that still import 'Strategy'.
-Strategy = AgentType
-
 
 class Trader(ap.Agent):
     """Single trader that decides buy/sell/hold and submits orders."""

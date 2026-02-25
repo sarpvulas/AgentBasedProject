@@ -53,6 +53,10 @@ class MarketModel(ap.Model):
 
     def _assign_types(self):
         n = self.p['n_agents']
+        frac_sum = self.p['frac_fundamental'] + self.p['frac_trend']
+        if frac_sum > 1.0:
+            raise ValueError(
+                f"frac_fundamental + frac_trend = {frac_sum:.2f} > 1.0")
         n_fund = int(n * self.p['frac_fundamental'])
         n_trend = int(n * self.p['frac_trend'])
         n_noise = n - n_fund - n_trend
@@ -108,6 +112,8 @@ class MarketModel(ap.Model):
     def _settle_trade(self, trade):
         buyer = self._agent_lookup[trade.buyer_id]
         seller = self._agent_lookup[trade.seller_id]
+        if buyer.cash < trade.price or seller.inventory < 1:
+            return  # Cancel trade — agent can't cover (stale resting order)
         buyer.cash -= trade.price
         seller.cash += trade.price
         buyer.inventory += 1

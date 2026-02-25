@@ -52,6 +52,7 @@ _SLIDERS = {
     "frac_trend":             ("frac_trend",            0.0,   1.0,   DEFAULT_PARAMS["frac_trend"],             0.01,  "%.2f"),
     "mu":                     ("mu (long-run mean)",    50.0,  200.0, DEFAULT_PARAMS["mu"],                     1.0,   "%.0f"),
     "kappa":                  ("kappa (reversion)",     0.001, 0.2,   DEFAULT_PARAMS["kappa"],                  0.001, "%.3f"),
+    "fundamental_initial":    ("F(0) initial value",    50.0,  200.0, DEFAULT_PARAMS["fundamental_initial"],    1.0,   "%.0f"),
     "fundamental_sigma":      ("sigma (fundamental)",   0.01,  2.0,   DEFAULT_PARAMS["fundamental_sigma"],      0.01,  "%.2f"),
     "fundamental_sensitivity":("fund. sensitivity",     0.1,   10.0,  DEFAULT_PARAMS["fundamental_sensitivity"],0.1,   "%.1f"),
     "trend_threshold":        ("trend threshold",       0.0,   5.0,   DEFAULT_PARAMS["trend_threshold"],        0.1,   "%.1f"),
@@ -114,8 +115,11 @@ with st.sidebar.expander("Agents", expanded=True):
     frac_trend = _slider("frac_trend")
     frac_noise = max(0, 1.0 - frac_fundamental - frac_trend)
     st.caption(f"Noise fraction: {frac_noise:.2f}")
+    if frac_fundamental + frac_trend > 1.0:
+        st.error("Fundamental + Trend fractions exceed 1.0!")
 
 with st.sidebar.expander("Fundamental Process", expanded=True):
+    fundamental_initial = _slider("fundamental_initial")
     mu = _slider("mu")
     kappa = _slider("kappa")
     fundamental_sigma = _slider("fundamental_sigma")
@@ -144,6 +148,7 @@ if run_clicked:
         "n_agents": n_agents,
         "frac_fundamental": frac_fundamental,
         "frac_trend": frac_trend,
+        "fundamental_initial": fundamental_initial,
         "mu": mu,
         "kappa": kappa,
         "fundamental_sigma": fundamental_sigma,
