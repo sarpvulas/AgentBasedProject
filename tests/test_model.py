@@ -83,3 +83,26 @@ class TestMarketModelRun:
         model.run()
         hist = model.fundamental.history
         assert len(hist) > 25
+
+    def test_no_negative_cash_or_inventory(self):
+        """Settlement validation prevents negative portfolios."""
+        params = {
+            **DEFAULT_PARAMS, 'steps': 200, 'n_agents': 30,
+            'initial_cash': 500.0, 'stale_order_age': 20,
+        }
+        model = MarketModel(params)
+        model.run()
+        for t in model.traders:
+            assert t.cash >= 0, f"Agent {t.id} has negative cash: {t.cash}"
+            assert t.inventory >= 0, (
+                f"Agent {t.id} has negative inventory: {t.inventory}")
+
+    def test_invalid_fractions_raise_error(self):
+        """frac_fundamental + frac_trend > 1 should raise ValueError."""
+        params = {
+            **DEFAULT_PARAMS, 'steps': 1, 'n_agents': 10,
+            'frac_fundamental': 0.6, 'frac_trend': 0.6,
+        }
+        with pytest.raises(ValueError, match=r"> 1\.0"):
+            model = MarketModel(params)
+            model.run()
