@@ -1,28 +1,20 @@
-"""Heterogeneous Agent Financial Market ABM."""
+"""Single-Asset LOB Market ABM."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
-from .agents import Strategy, Trader
+from .agents import AgentType, Trader
 from .config import DEFAULT_PARAMS
 from .fundamental import FundamentalProcess
-from .market_maker import MarketMaker
+from .order_book import Order, OrderBook, Trade
 from .model import MarketModel
-from .strategy_switching import (
-    compute_exponential_ma_fitness,
-    compute_strategy_fitness,
-    multinomial_logit_probabilities,
-    switch_strategies,
-)
 
 __all__ = [
+    "AgentType",
     "DEFAULT_PARAMS",
     "FundamentalProcess",
-    "MarketMaker",
     "MarketModel",
-    "Strategy",
+    "Order",
+    "OrderBook",
+    "Trade",
     "Trader",
-    "compute_exponential_ma_fitness",
-    "compute_strategy_fitness",
-    "multinomial_logit_probabilities",
-    "switch_strategies",
 ]
