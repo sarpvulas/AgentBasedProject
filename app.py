@@ -50,9 +50,10 @@ PRESETS = {
     "Crash Mode": {
         "beta": 20.0,
         "chi": 6.0,
-        "gamma": 5.0,
+        "gamma": 1.0,
         "herding": 3.5,
         "phi": 0.2,
+        "noise_sigma": 0.5,
     },
 }
 
