@@ -1,19 +1,20 @@
-"""Fundamental value process — geometric random walk."""
+"""Fundamental value process — mean-reverting Ornstein-Uhlenbeck."""
 
 import numpy as np
 
 
 class FundamentalProcess:
-    """Exogenous fundamental value evolving as a geometric random walk.
+    """Exogenous fundamental value with mean reversion.
 
-    V(t+1) = V(t) * exp(drift + volatility * epsilon)
+    F(t+1) = F(t) + kappa * (mu - F(t)) + sigma * epsilon(t)
     where epsilon ~ N(0, 1).
     """
 
-    def __init__(self, initial_value: float, drift: float, volatility: float,
-                 rng: np.random.Generator | None = None):
-        self.drift = drift
-        self.volatility = volatility
+    def __init__(self, initial_value: float, kappa: float, mu: float,
+                 sigma: float, rng: np.random.Generator | None = None):
+        self.kappa = kappa
+        self.mu = mu
+        self.sigma = sigma
         self.rng = rng or np.random.default_rng()
         self.value = initial_value
         self.history: list[float] = [initial_value]
@@ -21,21 +22,11 @@ class FundamentalProcess:
     def step(self) -> float:
         """Advance fundamental value by one period."""
         shock = self.rng.normal()
-        self.value *= np.exp(self.drift + self.volatility * shock)
+        self.value += self.kappa * (self.mu - self.value) + self.sigma * shock
         self.history.append(self.value)
         return self.value
 
     def apply_shock(self, pct_change: float) -> float:
-        """Apply a one-time percentage shock to the fundamental.
-
-        Parameters
-        ----------
-        pct_change : float
-            Fractional change, e.g. 0.05 for +5%.
-        """
+        """Apply a one-time percentage shock to the fundamental."""
         self.value *= (1.0 + pct_change)
         return self.value
-
-    @property
-    def log_value(self) -> float:
-        return np.log(self.value)
