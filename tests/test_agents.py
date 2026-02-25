@@ -5,78 +5,136 @@ import pytest
 
 import agentpy as ap
 
-from market_abm.agents import Strategy, Trader
+from market_abm.agents import AgentType, Trader
 
 
-def _make_trader(strategy=Strategy.FUNDAMENTALIST, **params):
+def _make_trader(agent_type=AgentType.NOISE, **params):
     """Helper: create a single Trader within a minimal model."""
     defaults = {
-        'phi': 1.0, 'chi': 1.5, 'noise_sigma': 0.05,
-        'chartist_memory': 10, 'n_agents': 1, 'steps': 1,
+        'initial_cash': 10000.0, 'initial_inventory': 10,
+        'fundamental_initial': 100.0, 'fundamental_sensitivity': 1.0,
+        'trend_threshold': 0.0, 'n_agents': 1, 'steps': 1,
     }
     defaults.update(params)
     model = ap.Model(defaults)
-    model.setup()  # initializes model.random
+    model.setup()
     trader = Trader(model)
     trader.setup()
-    trader.strategy = strategy
+    trader.agent_type = agent_type
     return trader
 
 
-class TestStrategy:
-    def test_enum_members(self):
-        assert Strategy.FUNDAMENTALIST.value != Strategy.CHARTIST.value
-        assert len(Strategy) == 3
+class TestTraderSetup:
+    def test_initial_portfolio(self):
+        trader = _make_trader()
+        assert trader.cash == 10000.0
+        assert trader.inventory == 10
+        assert trader.initial_wealth == 11000.0
 
 
-class TestTrader:
-    def test_fundamentalist_demand_undervalued(self):
-        trader = _make_trader(Strategy.FUNDAMENTALIST, phi=1.0)
-        # fundamental > price → positive demand
-        d = trader.compute_demand(price=90.0, fundamental=100.0,
-                                  past_returns=np.array([]))
-        assert d > 0
+class TestNoiseTrader:
+    def test_returns_order_or_none(self):
+        trader = _make_trader(AgentType.NOISE)
+        rng = np.random.default_rng(42)
+        results = [trader.decide(100.0, 99.0, 100.0, 99.0, 101.0, 1, rng)
+                   for _ in range(100)]
+        orders = [r for r in results if r is not None]
+        nones = [r for r in results if r is None]
+        assert len(orders) > 0
+        assert len(nones) > 0
 
-    def test_fundamentalist_demand_overvalued(self):
-        trader = _make_trader(Strategy.FUNDAMENTALIST, phi=1.0)
-        d = trader.compute_demand(price=110.0, fundamental=100.0,
-                                  past_returns=np.array([]))
-        assert d < 0
+    def test_cannot_sell_with_zero_inventory(self):
+        trader = _make_trader(AgentType.NOISE)
+        trader.inventory = 0
+        rng = np.random.default_rng(42)
+        for _ in range(200):
+            order = trader.decide(100.0, 99.0, 100.0, 99.0, 101.0, 1, rng)
+            if order is not None:
+                assert order.side != "sell"
 
-    def test_fundamentalist_demand_at_fair_value(self):
-        trader = _make_trader(Strategy.FUNDAMENTALIST, phi=1.0)
-        d = trader.compute_demand(price=100.0, fundamental=100.0,
-                                  past_returns=np.array([]))
-        assert d == pytest.approx(0.0)
+    def test_cannot_buy_without_cash(self):
+        trader = _make_trader(AgentType.NOISE)
+        trader.cash = 0.0
+        rng = np.random.default_rng(42)
+        for _ in range(200):
+            order = trader.decide(100.0, 99.0, 100.0, 99.0, 101.0, 1, rng)
+            if order is not None:
+                assert order.side != "buy"
 
-    def test_chartist_demand_positive_trend(self):
-        trader = _make_trader(Strategy.CHARTIST, chi=1.5)
-        returns = np.array([0.01, 0.02, 0.01])
-        d = trader.compute_demand(price=100.0, fundamental=100.0,
-                                  past_returns=returns)
-        assert d > 0
 
-    def test_chartist_demand_negative_trend(self):
-        trader = _make_trader(Strategy.CHARTIST, chi=1.5)
-        returns = np.array([-0.02, -0.01, -0.03])
-        d = trader.compute_demand(price=100.0, fundamental=100.0,
-                                  past_returns=returns)
-        assert d < 0
+class TestFundamentalTrader:
+    def test_buys_when_undervalued(self):
+        trader = _make_trader(AgentType.FUNDAMENTAL,
+                              fundamental_sensitivity=10.0)
+        rng = np.random.default_rng(42)
+        buys = sum(1 for _ in range(100)
+                   if (o := trader.decide(90.0, 89.0, 100.0, 89.0, 91.0,
+                                          1, rng)) is not None
+                   and o.side == "buy")
+        assert buys > 50
 
-    def test_chartist_demand_empty_returns(self):
-        trader = _make_trader(Strategy.CHARTIST)
-        d = trader.compute_demand(price=100.0, fundamental=100.0,
-                                  past_returns=np.array([]))
-        assert d == 0.0
+    def test_sells_when_overvalued(self):
+        trader = _make_trader(AgentType.FUNDAMENTAL,
+                              fundamental_sensitivity=10.0)
+        rng = np.random.default_rng(42)
+        sells = sum(1 for _ in range(100)
+                    if (o := trader.decide(110.0, 109.0, 100.0, 109.0, 111.0,
+                                           1, rng)) is not None
+                    and o.side == "sell")
+        assert sells > 50
 
-    def test_noise_demand_is_stochastic(self):
-        trader = _make_trader(Strategy.NOISE, noise_sigma=0.05)
-        demands = [trader.compute_demand(100.0, 100.0, np.array([])) for _ in range(100)]
-        assert np.std(demands) > 0
+    def test_prefers_limit_orders(self):
+        trader = _make_trader(AgentType.FUNDAMENTAL,
+                              fundamental_sensitivity=10.0)
+        rng = np.random.default_rng(42)
+        limits, total = 0, 0
+        for _ in range(200):
+            o = trader.decide(90.0, 89.0, 100.0, 89.0, 91.0, 1, rng)
+            if o is not None:
+                total += 1
+                if o.order_type == "limit":
+                    limits += 1
+        assert limits / total > 0.6
 
-    def test_phi_scaling(self):
-        t1 = _make_trader(Strategy.FUNDAMENTALIST, phi=1.0)
-        t2 = _make_trader(Strategy.FUNDAMENTALIST, phi=2.0)
-        d1 = t1.compute_demand(90.0, 100.0, np.array([]))
-        d2 = t2.compute_demand(90.0, 100.0, np.array([]))
-        assert d2 == pytest.approx(2.0 * d1)
+
+class TestTrendTrader:
+    def test_buys_on_uptrend(self):
+        trader = _make_trader(AgentType.TREND)
+        rng = np.random.default_rng(42)
+        order = None
+        for _ in range(50):
+            order = trader.decide(101.0, 100.0, 100.0, 99.0, 102.0, 1, rng)
+            if order is not None:
+                break
+        assert order is not None
+        assert order.side == "buy"
+
+    def test_sells_on_downtrend(self):
+        trader = _make_trader(AgentType.TREND)
+        rng = np.random.default_rng(42)
+        order = None
+        for _ in range(50):
+            order = trader.decide(99.0, 100.0, 100.0, 98.0, 100.0, 1, rng)
+            if order is not None:
+                break
+        assert order is not None
+        assert order.side == "sell"
+
+    def test_holds_when_flat(self):
+        trader = _make_trader(AgentType.TREND, trend_threshold=0.5)
+        rng = np.random.default_rng(42)
+        for _ in range(50):
+            order = trader.decide(100.1, 100.0, 100.0, 99.0, 101.0, 1, rng)
+            assert order is None
+
+    def test_prefers_market_orders(self):
+        trader = _make_trader(AgentType.TREND)
+        rng = np.random.default_rng(42)
+        markets, total = 0, 0
+        for _ in range(200):
+            o = trader.decide(102.0, 100.0, 100.0, 99.0, 103.0, 1, rng)
+            if o is not None:
+                total += 1
+                if o.order_type == "market":
+                    markets += 1
+        assert markets / total > 0.6
