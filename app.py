@@ -835,6 +835,20 @@ PRESETS = {
     },
 }
 
+_SLIDER_HELP = {
+    "n_agents":                "Total number of trading agents in the simulation. More agents smooth out individual noise but slow computation.",
+    "frac_fundamental":        "Fraction of agents that trade based on the gap between market price and fundamental value. They act as a stabilizing force.",
+    "frac_trend":              "Fraction of agents that follow price momentum (chartists). They amplify trends and can create bubbles. Remainder = noise traders.",
+    "mu":                      "Long-run mean that the fundamental value reverts to (Ornstein-Uhlenbeck process). Think of it as the 'fair' equilibrium price.",
+    "kappa":                   "Mean-reversion speed of the fundamental process. Higher kappa pulls the fundamental value back to mu faster, reducing drift.",
+    "fundamental_initial":     "Starting value of the fundamental price F(0) at t=0. Large deviations from mu create an initial reversion transient.",
+    "fundamental_sigma":       "Volatility (diffusion) of the fundamental value process. Higher sigma means the 'true' value itself is more uncertain.",
+    "fundamental_sensitivity": "How aggressively fundamentalist agents trade on the price–fundamental gap. Higher values produce larger order sizes and faster correction.",
+    "trend_threshold":         "Minimum recent return magnitude before trend-followers act. Below this threshold, chartists stay inactive — filters out noise.",
+    "stale_order_age":         "Number of steps after which unfilled limit orders are cancelled from the book. Lower values keep the book thin and reactive.",
+    "steps":                   "Total number of simulation time steps to run. Longer runs reveal slower dynamics like regime switches and tail events.",
+}
+
 _SLIDERS = {
     "n_agents":               ("n_agents",              10,    500,   DEFAULT_PARAMS["n_agents"],               1,     "%d"),
     "frac_fundamental":       ("frac_fundamental",      0.0,   1.0,   DEFAULT_PARAMS["frac_fundamental"],       0.01,  "%.2f"),
@@ -861,7 +875,8 @@ def _apply_preset(name):
 
 def _slider(key):
     label, mn, mx, default, step, fmt = _SLIDERS[key]
-    kwargs = dict(min_value=mn, max_value=mx, step=step, format=fmt, key=key)
+    kwargs = dict(min_value=mn, max_value=mx, step=step, format=fmt, key=key,
+                  help=_SLIDER_HELP.get(key))
     if key not in st.session_state:
         kwargs["value"] = default
     return st.slider(label, **kwargs)
@@ -924,7 +939,8 @@ with st.sidebar.expander("Simulation", expanded=True):
     steps = _slider("steps")
     if "seed" not in st.session_state:
         st.session_state["seed"] = DEFAULT_PARAMS["seed"]
-    seed = st.number_input("seed", step=1, key="seed")
+    seed = st.number_input("seed", step=1, key="seed",
+                           help="Random seed for reproducibility. Same seed + same parameters = identical run.")
 
 run_clicked = st.sidebar.button("Run Simulation", type="primary",
                                 use_container_width=True)
