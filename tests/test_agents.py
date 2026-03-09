@@ -121,7 +121,8 @@ class TestTrendTrader:
         assert order.side == "sell"
 
     def test_holds_when_flat(self):
-        trader = _make_trader(AgentType.TREND, trend_threshold=0.5)
+        # threshold=0.01 means 1% return needed; 100.1/100.0 = 0.1% < 1%
+        trader = _make_trader(AgentType.TREND, trend_threshold=0.01)
         rng = np.random.default_rng(42)
         for _ in range(50):
             order = trader.decide(100.1, 100.0, 100.0, 99.0, 101.0, 1, rng)

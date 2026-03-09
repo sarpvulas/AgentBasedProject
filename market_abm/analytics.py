@@ -1,5 +1,7 @@
 """Stylized facts validation and statistical analysis."""
 
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 from scipy.stats import jarque_bera, kstest, kurtosis, skew
@@ -155,3 +157,161 @@ def compute_portfolio_metrics(agents, agent_type, last_price: float) -> dict:
         ])),
         'n': len(typed),
     }
+
+
+# ── New analysis functions ───────────────────────────────────────────────
+
+
+def mean_absolute_mispricing(prices: np.ndarray,
+                              fundamentals: np.ndarray) -> float:
+    """Mean absolute deviation of price from fundamental value.
+
+    A scalar measure of market efficiency: lower = prices track fundamentals
+    more closely. Useful for comparing across scenarios and seeds.
+    """
+    return float(np.mean(np.abs(prices - fundamentals)))
+
+
+def rolling_volatility(returns: np.ndarray, window: int = 50) -> np.ndarray:
+    """Rolling standard deviation of returns.
+
+    Visualises volatility clustering — periods of high/low volatility should
+    be visible as sustained runs above/below the mean level.
+    """
+    s = pd.Series(returns)
+    return s.rolling(window, min_periods=window // 2).std().values
+
+
+def max_drawdown(prices: np.ndarray) -> tuple[float, int, int]:
+    """Maximum drawdown from peak to trough.
+
+    Returns (drawdown_pct, peak_idx, trough_idx).
+    Drawdown is expressed as a positive fraction (e.g. 0.15 = 15% drop).
+    """
+    cummax = np.maximum.accumulate(prices)
+    dd = (cummax - prices) / cummax
+    trough_idx = int(np.argmax(dd))
+    peak_idx = int(np.argmax(prices[:trough_idx + 1]))
+    return float(dd[trough_idx]), peak_idx, trough_idx
+
+
+def drawdown_series(prices: np.ndarray) -> np.ndarray:
+    """Full drawdown series (fraction below running peak) for plotting."""
+    cummax = np.maximum.accumulate(prices)
+    return (cummax - prices) / cummax
+
+
+def run_experiment(params: dict) -> dict:
+    """Run a single simulation and return a flat metrics dict.
+
+    This is the reusable building block for multi-seed, sensitivity,
+    and cross-scenario analyses. Returns all key metrics in one dict.
+    """
+    from .model import MarketModel
+    from .agents import AgentType
+
+    model = MarketModel(params)
+    model.run()
+    data = model.output.variables.MarketModel
+    prices = data['price'].values
+    fundamentals = data['fundamental'].values
+    all_returns = data['log_return'].values
+    returns = all_returns[all_returns != 0.0]
+
+    if len(returns) < 20:
+        return {'valid': False}
+
+    stats = compute_return_statistics(returns)
+    facts = validate_stylized_facts(returns)
+
+    last_price = model.order_book.last_trade_price or params.get(
+        'fundamental_initial', 100.0)
+
+    pnl = {}
+    for atype in AgentType:
+        m = compute_portfolio_metrics(list(model.traders), atype, last_price)
+        name = atype.name.lower()
+        pnl[f'{name}_mean_pnl'] = m['mean_pnl']
+        pnl[f'{name}_sharpe'] = m['sharpe']
+
+    spreads = data['spread'].values
+    valid_spreads = spreads[spreads > 0]
+
+    dd_pct, _, _ = max_drawdown(prices)
+
+    return {
+        'valid': True,
+        'volatility': stats['std'],
+        'kurtosis': stats['kurtosis'],
+        'skewness': stats['skewness'],
+        'mean_return': stats['mean'],
+        'hill_index': facts['tail_index']['hill_estimate'],
+        'vol_clustering_acf': facts['volatility_clustering']['avg_abs_acf_lag1_5'],
+        'return_acf': facts['no_return_autocorrelation']['mean_abs_acf_lag1_5'],
+        'mean_spread': float(np.mean(valid_spreads)) if len(valid_spreads) > 0 else 0.0,
+        'mean_abs_mispricing': mean_absolute_mispricing(prices, fundamentals),
+        'max_drawdown': dd_pct,
+        'mean_volume': float(data['volume'].mean()),
+        'fat_tails_pass': facts['fat_tails']['passed'],
+        'vol_clustering_pass': facts['volatility_clustering']['passed'],
+        'no_autocorr_pass': facts['no_return_autocorrelation']['passed'],
+        'non_normality_pass': facts['non_normality']['passed'],
+        'tail_index_pass': facts['tail_index']['passed'],
+        **pnl,
+    }
+
+
+def run_multi_seed(base_params: dict, n_seeds: int = 30,
+                   seed_start: int = 1) -> pd.DataFrame:
+    """Run the model across multiple seeds and collect metrics.
+
+    Returns a DataFrame with one row per seed and columns for every metric.
+    This directly tests whether stylized facts are robust properties of the
+    model rather than artifacts of a single random seed.
+    """
+    rows = []
+    for i in range(n_seeds):
+        p = {**base_params, 'seed': seed_start + i}
+        result = run_experiment(p)
+        if result.get('valid', False):
+            result['seed'] = seed_start + i
+            rows.append(result)
+    return pd.DataFrame(rows)
+
+
+def run_sensitivity(base_params: dict, param_name: str,
+                    values: list | np.ndarray) -> pd.DataFrame:
+    """Sweep a single parameter and return metrics for each value.
+
+    Keeps all other parameters fixed. Useful for understanding how a
+    mechanism parameter (e.g. trend_threshold) affects market dynamics.
+    """
+    rows = []
+    for v in values:
+        p = {**base_params, param_name: v}
+        result = run_experiment(p)
+        if result.get('valid', False):
+            result[param_name] = v
+            rows.append(result)
+    return pd.DataFrame(rows)
+
+
+def cross_scenario_comparison(scenarios: dict[str, dict]) -> pd.DataFrame:
+    """Run all named scenarios and return a comparison DataFrame.
+
+    Parameters
+    ----------
+    scenarios : dict mapping scenario name -> parameter overrides
+
+    Returns a DataFrame with scenarios as columns and metrics as rows.
+    """
+    from .config import DEFAULT_PARAMS
+    results = {}
+    for name, overrides in scenarios.items():
+        params = {**DEFAULT_PARAMS, **overrides}
+        metrics = run_experiment(params)
+        if metrics.get('valid', False):
+            results[name] = metrics
+    df = pd.DataFrame(results)
+    df = df.drop(index=['valid'], errors='ignore')
+    return df
