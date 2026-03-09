@@ -71,8 +71,8 @@ class MarketModel(ap.Model):
             trader.agent_type = atype
 
     def step(self):
-        self._prev_price = (self.order_book.last_trade_price
-                            or self._prev_price)
+        # Save previous price BEFORE updating to current
+        prev_price = self._prev_price
 
         # 1. Evolve fundamental
         self.fundamental.step()
@@ -82,7 +82,7 @@ class MarketModel(ap.Model):
         # 2. Market state
         price = (self.order_book.last_trade_price
                  or self.p['fundamental_initial'])
-        prev_price = self._prev_price
+        self._prev_price = price  # update for next step
         fundamental = self.fundamental.value
         best_bid = self.order_book.best_bid
         best_ask = self.order_book.best_ask

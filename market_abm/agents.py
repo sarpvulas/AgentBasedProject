@@ -100,7 +100,8 @@ class Trader(ap.Agent):
         if prev_price is None or prev_price <= 0 or price <= 0:
             return None
 
-        ret = price - prev_price
+        # Use percentage return so threshold is scale-independent
+        ret = (price - prev_price) / prev_price
         threshold = self.model.p.get('trend_threshold', 0.0)
 
         if ret > threshold:

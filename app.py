@@ -684,15 +684,25 @@ from market_abm.agents import AgentType
 from market_abm.analytics import (
     compute_portfolio_metrics,
     compute_return_statistics,
+    cross_scenario_comparison,
+    mean_absolute_mispricing,
+    run_experiment,
+    run_multi_seed,
+    run_sensitivity,
     validate_stylized_facts,
 )
 from market_abm.config import DEFAULT_PARAMS
 from market_abm.model import MarketModel
 from market_abm.visualization import (
     plot_autocorrelation_panel,
+    plot_drawdown,
+    plot_multi_seed_boxplots,
+    plot_multi_seed_pass_rates,
     plot_pnl_by_strategy,
     plot_price_and_fundamental,
     plot_return_distribution,
+    plot_rolling_volatility,
+    plot_sensitivity_line,
     plot_spread_over_time,
     plot_volume_over_time,
     plot_wealth_evolution,
@@ -844,7 +854,7 @@ _SLIDER_HELP = {
     "fundamental_initial":     "Starting value of the fundamental price F(0) at t=0. Large deviations from mu create an initial reversion transient.",
     "fundamental_sigma":       "Volatility (diffusion) of the fundamental value process. Higher sigma means the 'true' value itself is more uncertain.",
     "fundamental_sensitivity": "How aggressively fundamentalist agents trade on the price–fundamental gap. Higher values produce larger order sizes and faster correction.",
-    "trend_threshold":         "Minimum recent return magnitude before trend-followers act. Below this threshold, chartists stay inactive — filters out noise.",
+    "trend_threshold":         "Minimum percentage return before trend-followers act (0.01 = 1%). Below this threshold, chartists stay inactive — filters out noise.",
     "stale_order_age":         "Number of steps after which unfilled limit orders are cancelled from the book. Lower values keep the book thin and reactive.",
     "steps":                   "Total number of simulation time steps to run. Longer runs reveal slower dynamics like regime switches and tail events.",
 }
@@ -858,7 +868,7 @@ _SLIDERS = {
     "fundamental_initial":    ("F(0) initial value",    50.0,  200.0, DEFAULT_PARAMS["fundamental_initial"],    1.0,   "%.0f"),
     "fundamental_sigma":      ("sigma (fundamental)",   0.01,  2.0,   DEFAULT_PARAMS["fundamental_sigma"],      0.01,  "%.2f"),
     "fundamental_sensitivity":("fund. sensitivity",     0.1,   10.0,  DEFAULT_PARAMS["fundamental_sensitivity"],0.1,   "%.1f"),
-    "trend_threshold":        ("trend threshold",       0.0,   5.0,   DEFAULT_PARAMS["trend_threshold"],        0.1,   "%.1f"),
+    "trend_threshold":        ("trend threshold",       0.0,   0.05,  DEFAULT_PARAMS["trend_threshold"],        0.001, "%.3f"),
     "stale_order_age":        ("stale order age",       1,     50,    DEFAULT_PARAMS["stale_order_age"],        1,     "%d"),
     "steps":                  ("steps",                 100,   10000, DEFAULT_PARAMS["steps"],                  100,   "%d"),
 }
@@ -974,10 +984,408 @@ if run_clicked:
 
 # ── Main area ─────────────────────────────────────────────────────────────
 
-tab_sim, tab_guide = st.tabs(["Simulation", "Guide"])
+tab_sim, tab_analysis, tab_guide = st.tabs(["Simulation", "Analysis", "Guide"])
 
 with tab_guide:
     render_guide_tab()
+
+# ── Analysis Tab ─────────────────────────────────────────────────────────
+
+ANALYSIS_SCENARIOS = {
+    "Balanced": {"frac_fundamental": 0.33, "frac_trend": 0.33},
+    "Fund. Heavy": {"frac_fundamental": 0.60, "frac_trend": 0.20},
+    "Trend Heavy": {"frac_fundamental": 0.20, "frac_trend": 0.60},
+    "Mostly Noise": {"frac_fundamental": 0.15, "frac_trend": 0.15},
+}
+
+SENSITIVITY_CONFIGS = {
+    "trend_threshold": {
+        "label": "Trend Threshold (%)",
+        "values": [0.0, 0.001, 0.002, 0.005, 0.008, 0.01, 0.015, 0.02, 0.03, 0.05],
+        "description": "Minimum percentage return before trend followers act "
+                       "(0.01 = 1%). Higher values filter out noise, reducing trend-follower activity.",
+    },
+    "fundamental_sensitivity": {
+        "label": "Fundamental Sensitivity",
+        "values": [0.1, 0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0],
+        "description": "How aggressively fundamentalists trade on mispricing. "
+                       "Higher sensitivity means faster price correction toward fundamental value.",
+    },
+    "stale_order_age": {
+        "label": "Stale Order Age",
+        "values": [1, 3, 5, 10, 15, 20, 30, 50],
+        "description": "Steps before unfilled limit orders are cancelled. "
+                       "Shorter lifetimes keep the book fresh but may reduce available liquidity.",
+    },
+}
+
+
+_ANALYSIS_CACHE_VER = 3  # bump to invalidate stale cache
+
+
+@st.cache_data(show_spinner=False)
+def _run_cross_scenario(base_params_frozen, _ver=_ANALYSIS_CACHE_VER):
+    base = dict(base_params_frozen)
+    scenarios = {name: {**base, **overrides}
+                 for name, overrides in ANALYSIS_SCENARIOS.items()}
+    results = {}
+    for name, params in scenarios.items():
+        r = run_experiment(params)
+        if r.get('valid', False):
+            results[name] = r
+    return pd.DataFrame(results)
+
+
+@st.cache_data(show_spinner=False)
+def _run_multi_seed(base_params_frozen, n_seeds, _ver=_ANALYSIS_CACHE_VER):
+    base = dict(base_params_frozen)
+    return run_multi_seed(base, n_seeds=n_seeds)
+
+
+@st.cache_data(show_spinner=False)
+def _run_sensitivity_cached(base_params_frozen, param_name, values_tuple,
+                             _ver=_ANALYSIS_CACHE_VER):
+    base = dict(base_params_frozen)
+    return run_sensitivity(base, param_name, list(values_tuple))
+
+
+with tab_analysis:
+    st.markdown("## Robustness & Sensitivity Analysis")
+    st.caption("These analyses run the model multiple times to test robustness. "
+               "They use the simulation parameters from the sidebar (except where overridden).")
+
+    # Build base params from current sidebar state
+    analysis_base = {
+        **DEFAULT_PARAMS,
+        "n_agents": st.session_state.get("n_agents", DEFAULT_PARAMS["n_agents"]),
+        "frac_fundamental": st.session_state.get("frac_fundamental", DEFAULT_PARAMS["frac_fundamental"]),
+        "frac_trend": st.session_state.get("frac_trend", DEFAULT_PARAMS["frac_trend"]),
+        "fundamental_initial": st.session_state.get("fundamental_initial", DEFAULT_PARAMS["fundamental_initial"]),
+        "mu": st.session_state.get("mu", DEFAULT_PARAMS["mu"]),
+        "kappa": st.session_state.get("kappa", DEFAULT_PARAMS["kappa"]),
+        "fundamental_sigma": st.session_state.get("fundamental_sigma", DEFAULT_PARAMS["fundamental_sigma"]),
+        "fundamental_sensitivity": st.session_state.get("fundamental_sensitivity", DEFAULT_PARAMS["fundamental_sensitivity"]),
+        "trend_threshold": st.session_state.get("trend_threshold", DEFAULT_PARAMS["trend_threshold"]),
+        "stale_order_age": st.session_state.get("stale_order_age", DEFAULT_PARAMS["stale_order_age"]),
+        "steps": st.session_state.get("steps", DEFAULT_PARAMS["steps"]),
+        "seed": int(st.session_state.get("seed", DEFAULT_PARAMS["seed"])),
+    }
+    analysis_frozen = tuple(sorted(analysis_base.items()))
+
+    # ── 1. Cross-Scenario Comparison ─────────────────────────────────────
+    st.markdown("### 1. Cross-Scenario Comparison")
+    st.caption("Runs all four scenarios with current parameters and compares key metrics side-by-side.")
+
+    if st.button("Run Cross-Scenario Comparison", key="btn_cross"):
+        with st.spinner("Running 4 scenarios..."):
+            cross_df = _run_cross_scenario(analysis_frozen)
+        st.session_state["cross_df"] = cross_df
+
+    if "cross_df" in st.session_state:
+        cross_df = st.session_state["cross_df"]
+        # Select display metrics and format nicely
+        display_metrics = [
+            ('volatility', 'Return Volatility', '.6f'),
+            ('kurtosis', 'Excess Kurtosis', '.2f'),
+            ('hill_index', 'Hill Tail Index', '.2f'),
+            ('mean_spread', 'Mean Spread', '.3f'),
+            ('mean_abs_mispricing', 'Mean |P - F|', '.3f'),
+            ('mean_volume', 'Mean Volume', '.1f'),
+            ('max_drawdown', 'Max Drawdown', '.3f'),
+            ('vol_clustering_acf', 'ACF(|r|) Lags 1-5', '.4f'),
+            ('return_acf', 'ACF(r) Lags 1-5', '.4f'),
+            ('fundamental_mean_pnl', 'Fund. Mean PnL', '.2f'),
+            ('trend_mean_pnl', 'Trend Mean PnL', '.2f'),
+            ('noise_mean_pnl', 'Noise Mean PnL', '.2f'),
+        ]
+        rows = {}
+        for key, label, fmt in display_metrics:
+            if key in cross_df.index:
+                row = cross_df.loc[key]
+                rows[label] = {col: f"{float(val):{fmt}}" for col, val in row.items()}
+        # Add pass/fail rows
+        fact_rows = [
+            ('fat_tails_pass', 'Fat Tails'),
+            ('vol_clustering_pass', 'Volatility Clustering'),
+            ('no_autocorr_pass', 'No Return Autocorr.'),
+            ('non_normality_pass', 'Non-Normality'),
+            ('tail_index_pass', 'Tail Index [2,6]'),
+        ]
+        for key, label in fact_rows:
+            if key in cross_df.index:
+                row = cross_df.loc[key]
+                rows[label] = {col: ("PASS" if val else "FAIL") for col, val in row.items()}
+
+        display_df = pd.DataFrame(rows).T
+        st.dataframe(display_df, use_container_width=True)
+
+        with st.expander("How to read this table"):
+            st.markdown("""
+Each column is a scenario with a different trader composition. Each row is
+a market metric measured under that composition. Key comparisons:
+
+- **Return Volatility:** Higher in trend-heavy markets because momentum
+  trading amplifies price swings. Lower in fundamental-heavy markets where
+  informed traders stabilise prices.
+- **Excess Kurtosis:** Measures tail risk. Trend-heavy markets tend to produce
+  more extreme events (crashes and spikes), increasing kurtosis.
+- **Mean |P - F|:** Market efficiency. Fundamental-heavy markets keep prices
+  closest to the true value; noise-dominated markets show the most mispricing.
+- **Mean Spread:** Liquidity indicator. Wider spreads suggest fewer resting
+  orders or more uncertainty.
+- **Max Drawdown:** Worst peak-to-trough decline. Trend-heavy markets are
+  more crash-prone due to momentum cascades.
+- **PnL by strategy:** Fundamental traders typically profit by exploiting
+  mispricing. Noise traders tend to lose money over time. Trend follower
+  profitability depends on whether sustained trends exist.
+- **Stylized fact pass/fail:** Shows whether each scenario produces
+  return properties consistent with real financial markets. A realistic model
+  should pass most tests across scenarios.
+""")
+
+    st.markdown("---")
+
+    # ── 2. Multi-Seed Robustness ─────────────────────────────────────────
+    st.markdown("### 2. Multi-Seed Robustness Analysis")
+    st.caption("Runs the balanced scenario across multiple random seeds to test "
+               "whether stylized facts are robust model properties, not seed artifacts.")
+
+    n_seeds = st.slider("Number of seeds", min_value=10, max_value=50,
+                        value=30, step=5, key="n_seeds_slider")
+
+    if st.button("Run Multi-Seed Analysis", key="btn_seeds"):
+        with st.spinner(f"Running {n_seeds} seeds..."):
+            seed_df = _run_multi_seed(analysis_frozen, n_seeds)
+        st.session_state["seed_df"] = seed_df
+
+    if "seed_df" in st.session_state:
+        seed_df = st.session_state["seed_df"]
+        st.markdown(f"**{len(seed_df)} valid runs** out of {n_seeds} seeds")
+
+        # Pass rates chart
+        st.markdown("#### Stylized Fact Pass Rates")
+        fig_pr, ax_pr = plt.subplots(figsize=(8, 4))
+        plot_multi_seed_pass_rates(seed_df, ax=ax_pr)
+        fig_pr.tight_layout()
+        st.pyplot(fig_pr)
+        plt.close(fig_pr)
+
+        # Box plots of key metrics
+        st.markdown("#### Distribution of Key Metrics Across Seeds")
+        fig_bp, axes_bp = plt.subplots(1, 6, figsize=(20, 4))
+        plot_multi_seed_boxplots(seed_df, axes=list(axes_bp))
+        fig_bp.tight_layout()
+        st.pyplot(fig_bp)
+        plt.close(fig_bp)
+
+        # Summary statistics table
+        with st.expander("Detailed Seed Statistics"):
+            summary_cols = ['volatility', 'kurtosis', 'hill_index',
+                            'vol_clustering_acf', 'mean_abs_mispricing',
+                            'max_drawdown', 'mean_spread', 'mean_volume']
+            existing_cols = [c for c in summary_cols if c in seed_df.columns]
+            summary = seed_df[existing_cols].describe().round(4)
+            st.dataframe(summary, use_container_width=True)
+
+        with st.expander("How to interpret these results"):
+            st.markdown("""
+**Why multi-seed analysis matters:**
+A single simulation run uses one random seed, which determines the specific
+sequence of random events (noise trader decisions, order arrival, fundamental
+shocks). Different seeds produce different price paths. Multi-seed analysis
+tests whether the model's statistical properties are **robust** — genuine
+features of the model design — rather than artifacts of a particular seed.
+
+**Pass rate chart:** Shows what percentage of seeds produce results that pass
+each stylized fact test. A pass rate above 80% indicates the property is a
+robust feature of the model. Lower rates suggest the result is sensitive to
+random conditions.
+
+**Box plots:** Show the distribution of each metric across seeds. A tight
+box (small interquartile range) means the metric is stable and reproducible.
+A wide box or many outliers suggests high sensitivity to random conditions.
+The dotted line shows the mean value.
+
+**What to look for:**
+- Fat tails and non-normality should pass consistently (>80%) — these are
+  the most fundamental stylized facts.
+- Volatility clustering pass rates may be lower, as this property depends
+  on specific agent interaction patterns that vary across seeds.
+- Kurtosis and Hill index distributions show how reliably the model produces
+  realistic tail behaviour.
+""")
+
+
+    st.markdown("---")
+
+    # ── 3. Sensitivity Analysis ──────────────────────────────────────────
+    st.markdown("### 3. Sensitivity Analysis")
+    st.caption("Sweeps one parameter at a time to understand how mechanism "
+               "parameters affect market dynamics.")
+
+    sens_param = st.selectbox(
+        "Parameter to sweep",
+        options=list(SENSITIVITY_CONFIGS.keys()),
+        format_func=lambda x: SENSITIVITY_CONFIGS[x]["label"],
+        key="sens_param_select",
+    )
+    st.caption(SENSITIVITY_CONFIGS[sens_param]["description"])
+
+    if st.button("Run Sensitivity Sweep", key="btn_sensitivity"):
+        values = SENSITIVITY_CONFIGS[sens_param]["values"]
+        with st.spinner(f"Sweeping {sens_param} ({len(values)} values)..."):
+            sweep_df = _run_sensitivity_cached(
+                analysis_frozen, sens_param, tuple(values))
+        st.session_state["sweep_df"] = sweep_df
+        st.session_state["sweep_param"] = sens_param
+
+    if "sweep_df" in st.session_state and "sweep_param" in st.session_state:
+        sweep_df = st.session_state["sweep_df"]
+        sweep_param = st.session_state["sweep_param"]
+
+        if len(sweep_df) > 1:
+            # 2x3 grid of sensitivity plots
+            metrics_to_plot = [
+                ('volatility', 'Return Volatility', '#2196F3'),
+                ('kurtosis', 'Excess Kurtosis', '#FF9800'),
+                ('mean_abs_mispricing', 'Mean |P - F|', '#F44336'),
+                ('mean_spread', 'Mean Spread', '#4CAF50'),
+                ('hill_index', 'Hill Tail Index', '#9C27B0'),
+                ('max_drawdown', 'Max Drawdown', '#607D8B'),
+            ]
+            fig_sens, axes_sens = plt.subplots(2, 3, figsize=(16, 8))
+            axes_flat = axes_sens.flatten()
+            for i, (metric, ylabel, color) in enumerate(metrics_to_plot):
+                if metric in sweep_df.columns:
+                    plot_sensitivity_line(sweep_df, sweep_param, metric,
+                                          ax=axes_flat[i], color=color,
+                                          ylabel=ylabel)
+            fig_sens.tight_layout()
+            st.pyplot(fig_sens)
+            plt.close(fig_sens)
+
+            # Data table
+            with st.expander("Raw Sensitivity Data"):
+                show_cols = [sweep_param] + [m for m, _, _ in metrics_to_plot
+                                              if m in sweep_df.columns]
+                st.dataframe(sweep_df[show_cols].round(4),
+                             use_container_width=True)
+
+            # Metric explanations
+            with st.expander("What do these metrics mean?"):
+                st.markdown("""
+**Return Volatility** — Standard deviation of log returns. Measures how much
+prices fluctuate per step. Higher volatility means more unpredictable price
+movements. In real markets, excess volatility beyond what fundamentals justify
+is a well-documented phenomenon often attributed to behavioural trading.
+
+**Excess Kurtosis** — Measures how often extreme price moves occur relative
+to a normal distribution. A normal distribution has kurtosis = 3 (excess = 0).
+Financial returns typically show excess kurtosis of 5–20, meaning crashes and
+spikes happen far more often than a bell curve would predict.
+
+**Mean |P - F| (Mean Absolute Mispricing)** — Average absolute deviation of
+the market price from the fundamental value across all time steps. This is a
+direct measure of market efficiency: lower values mean prices track
+fundamentals more closely. Higher values indicate that behavioural trading
+pushes prices away from their true value.
+
+**Mean Spread** — Average bid-ask spread across the simulation. The spread
+is the cost of trading immediately (buying at the ask and selling at the bid).
+Narrow spreads indicate a liquid market where trades can occur easily; wider
+spreads reflect lower liquidity or higher uncertainty among traders.
+
+**Hill Tail Index** — Estimates the power-law exponent of the return
+distribution's tails using the Hill (1975) estimator. Lower values mean heavier
+tails (more extreme events). Real financial data typically falls in the range
+of 2–5. Values below 2 indicate extremely heavy tails; above 6 suggests
+the tails are thinner than typically observed in markets.
+
+**Max Drawdown** — The largest peak-to-trough price decline during the
+simulation, expressed as a fraction (e.g. 0.15 = 15% drop). This quantifies
+the worst-case crash scenario. Deeper drawdowns indicate that the market is
+more prone to sustained sell-offs, often driven by momentum cascades.
+""")
+
+            # Parameter-specific interpretation
+            _PARAM_INTERPRETATIONS = {
+                "trend_threshold": """
+**How Trend Threshold affects the market:**
+
+The trend threshold controls the minimum percentage return that triggers
+trend-following behaviour (0.01 = 1%). It acts as a **noise filter** for
+momentum traders.
+
+- **Low threshold (0–0.2%):** Trend followers react to nearly every price
+  movement, creating strong positive feedback. Small price increases trigger
+  buying, which pushes prices higher, triggering more buying. This amplifies
+  volatility, increases mispricing, produces heavier tails, and deepens
+  drawdowns. The market becomes prone to bubble–crash dynamics.
+
+- **High threshold (2–5%):** Trend followers only respond to large price
+  swings, effectively becoming inactive in calm markets. The market behaves
+  as though it consists mainly of fundamental and noise traders. Volatility
+  drops, prices track fundamentals more closely, and extreme events become
+  rarer.
+
+This demonstrates a key insight: **the sensitivity of momentum traders to
+price signals is a major determinant of market stability**. Even a small
+population of active trend followers can substantially increase systemic risk.
+""",
+                "fundamental_sensitivity": """
+**How Fundamental Sensitivity affects the market:**
+
+Fundamental sensitivity controls how aggressively fundamentalist traders
+respond to the gap between market price and fundamental value. Higher values
+mean they trade more frequently and with greater conviction when they detect
+mispricing.
+
+- **Low sensitivity (0.1–0.5):** Fundamentalists trade infrequently, even
+  when prices are far from the true value. Mispricings persist longer, the
+  market is less efficient, and noise and momentum have more influence on
+  prices.
+
+- **High sensitivity (5–10):** Fundamentalists react quickly to any deviation,
+  acting as strong stabilisers. Prices are pulled back toward fundamentals
+  rapidly, reducing mispricing and volatility. However, very high sensitivity
+  can also reduce spread (because fundamentalists use 80% limit orders,
+  providing liquidity near the fundamental value).
+
+This shows the **stabilising role of informed traders**: when fundamentalists
+are more active, markets become more efficient and less volatile.
+""",
+                "stale_order_age": """
+**How Stale Order Age affects the market:**
+
+Stale order age determines how many steps a limit order can remain in the
+order book before being automatically cancelled. It controls the **freshness**
+of available liquidity.
+
+- **Short lifetime (1–5 steps):** The order book is thin and reactive. Only
+  very recent orders remain, so the book reflects current conditions. However,
+  with fewer resting orders, market orders are less likely to find matches,
+  reducing trading volume and potentially widening spreads.
+
+- **Long lifetime (20–50 steps):** The order book accumulates more resting
+  orders, providing deeper liquidity. However, stale orders may reflect
+  outdated valuations, leading to trades at prices that no longer make
+  economic sense. This can increase mispricing and create artificial matches
+  between current market orders and obsolete limit orders.
+
+This illustrates the **liquidity–staleness trade-off**: deeper books provide
+more liquidity but at the cost of price accuracy.
+""",
+            }
+
+            interp = _PARAM_INTERPRETATIONS.get(sweep_param)
+            if interp:
+                with st.expander(
+                    f"Interpreting {SENSITIVITY_CONFIGS[sweep_param]['label']} results"
+                ):
+                    st.markdown(interp)
+        else:
+            st.warning("Not enough valid results to plot. "
+                       "Try adjusting parameters or sweep values.")
 
 with tab_sim:
     if "data" not in st.session_state:
@@ -1043,6 +1451,24 @@ with tab_sim:
             fig6.tight_layout()
             st.pyplot(fig6)
             plt.close(fig6)
+
+        # Rolling Volatility and Drawdown
+        if len(nonzero) > 60:
+            col_rv, col_dd = st.columns(2)
+            with col_rv:
+                st.markdown("### Rolling Volatility")
+                fig_rv, ax_rv = plt.subplots(figsize=(6, 3))
+                plot_rolling_volatility(nonzero, window=50, ax=ax_rv)
+                fig_rv.tight_layout()
+                st.pyplot(fig_rv)
+                plt.close(fig_rv)
+            with col_dd:
+                st.markdown("### Drawdown from Peak")
+                fig_dd, ax_dd = plt.subplots(figsize=(6, 3))
+                plot_drawdown(data['price'].values, ax=ax_dd)
+                fig_dd.tight_layout()
+                st.pyplot(fig_dd)
+                plt.close(fig_dd)
 
         # PnL by strategy
         st.markdown("### PnL by Strategy")
