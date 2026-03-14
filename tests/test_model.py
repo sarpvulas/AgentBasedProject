@@ -97,6 +97,24 @@ class TestMarketModelRun:
             assert t.inventory >= 0, (
                 f"Agent {t.id} has negative inventory: {t.inventory}")
 
+    def test_price_no_explosion(self):
+        """Price should stay near fundamental, not explode via trend feedback."""
+        params = {
+            **DEFAULT_PARAMS, 'steps': 2000, 'n_agents': 100,
+            'trend_threshold': 0.0,  # most sensitive setting
+            'frac_trend': 0.33, 'frac_fundamental': 0.33,
+        }
+        model = MarketModel(params)
+        results = model.run()
+        prices = results.variables.MarketModel['price'].values
+        fundamental = params['fundamental_initial']
+        # Price should not deviate more than 50% from fundamental
+        assert prices.max() < fundamental * 1.5, (
+            f"Price exploded to {prices.max():.1f} "
+            f"(fundamental={fundamental})")
+        assert prices.min() > fundamental * 0.5, (
+            f"Price collapsed to {prices.min():.1f}")
+
     def test_invalid_fractions_raise_error(self):
         """frac_fundamental + frac_trend > 1 should raise ValueError."""
         params = {
