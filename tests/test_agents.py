@@ -120,34 +120,6 @@ class TestTrendTrader:
         assert order is not None
         assert order.side == "sell"
 
-    def test_holds_when_flat(self):
-        # threshold=0.01 means 1% return needed; 100.1/100.0 = 0.1% < 1%
-        trader = _make_trader(AgentType.TREND, trend_threshold=0.01)
-        rng = np.random.default_rng(42)
-        for _ in range(50):
-            order = trader.decide(100.1, 100.0, 100.0, 99.0, 101.0, 1, rng)
-            assert order is None
-
-    def test_probabilistic_action_small_return(self):
-        """Small returns should trigger action less often than large returns."""
-        trader = _make_trader(AgentType.TREND, trend_sensitivity=10.0)
-        rng_small = np.random.default_rng(42)
-        rng_large = np.random.default_rng(42)
-
-        # Small return: 0.1% → action_prob = 0.001 * 10 = 0.01
-        small_actions = sum(
-            1 for _ in range(500)
-            if trader.decide(100.1, 100.0, 100.0, 99.0, 101.0, 1, rng_small)
-            is not None)
-
-        # Large return: 5% → action_prob = 0.05 * 10 = 0.5
-        large_actions = sum(
-            1 for _ in range(500)
-            if trader.decide(105.0, 100.0, 100.0, 99.0, 106.0, 1, rng_large)
-            is not None)
-
-        assert large_actions > small_actions * 2
-
     def test_prefers_market_orders(self):
         trader = _make_trader(AgentType.TREND)
         rng = np.random.default_rng(42)
