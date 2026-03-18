@@ -21,9 +21,7 @@ DEFAULT_PARAMS = {
 
     # Agent behavior
     'fundamental_sensitivity': 1.0,  # scales action probability
-    'trend_threshold': 0.0,          # min % return to trigger trend (0.01 = 1%)
-    'trend_sensitivity': 10.0,       # scales action probability (like fundamental_sensitivity)
-    'trend_lookback': 20,            # steps for trend signal (EMA window)
+    'trend_threshold': 0.0,          # min price change to trigger trend
 
     # Order book
     'stale_order_age': 10,  # max age before limit order cancellation
