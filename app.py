@@ -1452,24 +1452,6 @@ with tab_sim:
             st.pyplot(fig6)
             plt.close(fig6)
 
-        # Rolling Volatility and Drawdown
-        if len(nonzero) > 60:
-            col_rv, col_dd = st.columns(2)
-            with col_rv:
-                st.markdown("### Rolling Volatility")
-                fig_rv, ax_rv = plt.subplots(figsize=(6, 3))
-                plot_rolling_volatility(nonzero, window=50, ax=ax_rv)
-                fig_rv.tight_layout()
-                st.pyplot(fig_rv)
-                plt.close(fig_rv)
-            with col_dd:
-                st.markdown("### Drawdown from Peak")
-                fig_dd, ax_dd = plt.subplots(figsize=(6, 3))
-                plot_drawdown(data['price'].values, ax=ax_dd)
-                fig_dd.tight_layout()
-                st.pyplot(fig_dd)
-                plt.close(fig_dd)
-
         # PnL by strategy
         st.markdown("### PnL by Strategy")
         col_c, col_d = st.columns([1, 2])
