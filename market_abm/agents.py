@@ -100,15 +100,22 @@ class Trader(ap.Agent):
         if prev_price is None or prev_price <= 0 or price <= 0:
             return None
 
-        ret = price - prev_price
+        # Use percentage return so threshold is scale-independent
+        ret = (price - prev_price) / prev_price
         threshold = self.model.p.get('trend_threshold', 0.0)
 
-        if ret > threshold:
-            side = "buy"
-        elif ret < -threshold:
-            side = "sell"
-        else:
+        if abs(ret) <= threshold:
             return None
+
+        # Probabilistic participation scaled by return magnitude
+        # (mirrors fundamentalist logic — prevents all trend followers
+        # from piling in simultaneously on tiny moves)
+        sensitivity = self.model.p.get('trend_sensitivity', 10.0)
+        action_prob = min(abs(ret) * sensitivity, 1.0)
+        if rng.random() > action_prob:
+            return None
+
+        side = "buy" if ret > 0 else "sell"
 
         if side == "buy" and self.cash < price:
             return None
