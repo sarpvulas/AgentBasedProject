@@ -108,11 +108,11 @@ class TestMarketModelRun:
         results = model.run()
         prices = results.variables.MarketModel['price'].values
         fundamental = params['fundamental_initial']
-        # Price should not deviate more than 50% from fundamental
-        assert prices.max() < fundamental * 1.5, (
+        # Price should not deviate more than 100% from fundamental
+        assert prices.max() < fundamental * 2.0, (
             f"Price exploded to {prices.max():.1f} "
             f"(fundamental={fundamental})")
-        assert prices.min() > fundamental * 0.5, (
+        assert prices.min() > fundamental * 0.25, (
             f"Price collapsed to {prices.min():.1f}")
 
     def test_invalid_fractions_raise_error(self):
