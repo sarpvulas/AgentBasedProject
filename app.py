@@ -855,7 +855,6 @@ _SLIDER_HELP = {
     "fundamental_sigma":       "Volatility (diffusion) of the fundamental value process. Higher sigma means the 'true' value itself is more uncertain.",
     "fundamental_sensitivity": "How aggressively fundamentalist agents trade on the price–fundamental gap. Higher values produce larger order sizes and faster correction.",
     "trend_threshold":         "Minimum percentage return before trend-followers act (0.01 = 1%). Below this threshold, chartists stay inactive — filters out noise.",
-    "trend_sensitivity":       "Scales the probability of a trend-follower acting once threshold is crossed. Higher = more aggressive. At 10, a 5% return gives 50% action probability.",
     "stale_order_age":         "Number of steps after which unfilled limit orders are cancelled from the book. Lower values keep the book thin and reactive.",
     "steps":                   "Total number of simulation time steps to run. Longer runs reveal slower dynamics like regime switches and tail events.",
 }
@@ -870,7 +869,6 @@ _SLIDERS = {
     "fundamental_sigma":      ("sigma (fundamental)",   0.01,  2.0,   DEFAULT_PARAMS["fundamental_sigma"],      0.01,  "%.2f"),
     "fundamental_sensitivity":("fund. sensitivity",     0.1,   10.0,  DEFAULT_PARAMS["fundamental_sensitivity"],0.1,   "%.1f"),
     "trend_threshold":        ("trend threshold",       0.0,   0.05,  DEFAULT_PARAMS["trend_threshold"],        0.001, "%.3f"),
-    "trend_sensitivity":      ("trend sensitivity",     1.0,   50.0,  DEFAULT_PARAMS["trend_sensitivity"],      1.0,   "%.0f"),
     "stale_order_age":        ("stale order age",       1,     50,    DEFAULT_PARAMS["stale_order_age"],        1,     "%d"),
     "steps":                  ("steps",                 100,   10000, DEFAULT_PARAMS["steps"],                  100,   "%d"),
 }
@@ -943,7 +941,6 @@ with st.sidebar.expander("Fundamental Process", expanded=True):
 with st.sidebar.expander("Agent Behavior", expanded=False):
     fundamental_sensitivity = _slider("fundamental_sensitivity")
     trend_threshold = _slider("trend_threshold")
-    trend_sensitivity = _slider("trend_sensitivity")
 
 with st.sidebar.expander("Order Book", expanded=False):
     stale_order_age = _slider("stale_order_age")
@@ -972,7 +969,6 @@ if run_clicked:
         "fundamental_sigma": fundamental_sigma,
         "fundamental_sensitivity": fundamental_sensitivity,
         "trend_threshold": trend_threshold,
-        "trend_sensitivity": trend_sensitivity,
         "stale_order_age": stale_order_age,
         "steps": steps,
         "seed": int(seed),
@@ -1070,7 +1066,6 @@ with tab_analysis:
         "fundamental_sigma": st.session_state.get("fundamental_sigma", DEFAULT_PARAMS["fundamental_sigma"]),
         "fundamental_sensitivity": st.session_state.get("fundamental_sensitivity", DEFAULT_PARAMS["fundamental_sensitivity"]),
         "trend_threshold": st.session_state.get("trend_threshold", DEFAULT_PARAMS["trend_threshold"]),
-        "trend_sensitivity": st.session_state.get("trend_sensitivity", DEFAULT_PARAMS["trend_sensitivity"]),
         "stale_order_age": st.session_state.get("stale_order_age", DEFAULT_PARAMS["stale_order_age"]),
         "steps": st.session_state.get("steps", DEFAULT_PARAMS["steps"]),
         "seed": int(st.session_state.get("seed", DEFAULT_PARAMS["seed"])),
