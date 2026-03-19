@@ -134,11 +134,21 @@ def validate_stylized_facts(returns: np.ndarray, nlags: int = 20) -> dict:
 
 
 def compute_portfolio_metrics(agents, agent_type, last_price: float) -> dict:
-    """Compute wealth, PnL, and Sharpe for agents of a given type."""
+    """Compute wealth, PnL, and Sharpe for agents of a given type.
+
+    PnL is decomposed into two components:
+    - **Trading PnL**: profit/loss from buy/sell decisions. Computed as
+      (cash - initial_cash) + (inventory - initial_inventory) * last_price.
+    - **Revaluation PnL**: gain/loss from holding the initial inventory as
+      the price changes. Equals initial_inventory * (last_price - initial_price).
+
+    Total PnL = Trading PnL + Revaluation PnL.
+    """
     typed = [a for a in agents if a.agent_type == agent_type]
     if not typed:
         return {'mean_pnl': 0.0, 'std_pnl': 0.0, 'sharpe': 0.0,
-                'mean_wealth': 0.0, 'n': 0}
+                'mean_wealth': 0.0, 'mean_trading_pnl': 0.0,
+                'mean_revaluation_pnl': 0.0, 'n': 0}
 
     pnls = np.array([
         (a.cash + a.inventory * last_price) - a.initial_wealth
@@ -148,6 +158,21 @@ def compute_portfolio_metrics(agents, agent_type, last_price: float) -> dict:
     std_pnl = float(np.std(pnls))
     sharpe = mean_pnl / std_pnl if std_pnl > 0 else 0.0
 
+    # Decompose PnL into trading vs revaluation when model context is available
+    mean_trading_pnl = 0.0
+    revaluation = 0.0
+    model = getattr(typed[0], 'model', None)
+    if model is not None:
+        init_inv = model.p.get('initial_inventory', 10)
+        init_price = model.p.get('fundamental_initial', 100.0)
+        init_cash = model.p.get('initial_cash', 10000.0)
+        trading_pnls = np.array([
+            (a.cash - init_cash) + (a.inventory - init_inv) * last_price
+            for a in typed
+        ])
+        mean_trading_pnl = float(np.mean(trading_pnls))
+        revaluation = float(init_inv * (last_price - init_price))
+
     return {
         'mean_pnl': mean_pnl,
         'std_pnl': std_pnl,
@@ -155,6 +180,8 @@ def compute_portfolio_metrics(agents, agent_type, last_price: float) -> dict:
         'mean_wealth': float(np.mean([
             a.cash + a.inventory * last_price for a in typed
         ])),
+        'mean_trading_pnl': mean_trading_pnl,
+        'mean_revaluation_pnl': revaluation,
         'n': len(typed),
     }
 
@@ -280,19 +307,35 @@ def run_multi_seed(base_params: dict, n_seeds: int = 30,
 
 
 def run_sensitivity(base_params: dict, param_name: str,
-                    values: list | np.ndarray) -> pd.DataFrame:
+                    values: list | np.ndarray,
+                    n_seeds: int = 5,
+                    seed_start: int = 1) -> pd.DataFrame:
     """Sweep a single parameter and return metrics for each value.
 
-    Keeps all other parameters fixed. Useful for understanding how a
-    mechanism parameter (e.g. trend_threshold) affects market dynamics.
+    Keeps all other parameters fixed. When n_seeds > 1, each parameter
+    value is run across multiple seeds and the results are averaged,
+    reducing seed-specific artifacts.
     """
     rows = []
     for v in values:
-        p = {**base_params, param_name: v}
-        result = run_experiment(p)
-        if result.get('valid', False):
-            result[param_name] = v
-            rows.append(result)
+        seed_results = []
+        for s in range(n_seeds):
+            p = {**base_params, param_name: v, 'seed': seed_start + s}
+            result = run_experiment(p)
+            if result.get('valid', False):
+                seed_results.append(result)
+        if seed_results:
+            # Average numeric columns across seeds
+            avg = {}
+            for key in seed_results[0]:
+                vals = [r[key] for r in seed_results if key in r]
+                if isinstance(vals[0], (int, float, bool, np.integer,
+                                        np.floating, np.bool_)):
+                    avg[key] = float(np.mean(vals))
+                else:
+                    avg[key] = vals[0]
+            avg[param_name] = v
+            rows.append(avg)
     return pd.DataFrame(rows)
 
 

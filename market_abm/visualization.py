@@ -138,11 +138,13 @@ def plot_wealth_evolution(data: pd.DataFrame,
     }
     for col, (label, color) in wealth_cols.items():
         if col in data.columns:
-            ax.plot(data.index, data[col], label=label,
+            initial = data[col].iloc[0]
+            ax.plot(data.index, data[col] - initial, label=label,
                     color=color, linewidth=0.8, alpha=0.8)
+    ax.axhline(0, color='black', linewidth=0.5, alpha=0.5)
     ax.set_xlabel('Step')
-    ax.set_ylabel('Mean Wealth')
-    ax.set_title('Wealth Evolution by Strategy')
+    ax.set_ylabel('Mean PnL (Wealth - Initial)')
+    ax.set_title('PnL Evolution by Strategy')
     ax.legend()
     return ax
 
