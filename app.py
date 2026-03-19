@@ -480,10 +480,10 @@ CHART_CONTENT = {
         ),
     },
     "wealth": {
-        "icon": "💰", "title": "Wealth Evolution", "color": "rose",
+        "icon": "💰", "title": "PnL Evolution", "color": "rose",
         "simple": (
-            "How much money each group of traders has over time (cash + "
-            "the value of their holdings)."
+            "How much profit or loss each group of traders has over time, "
+            "relative to their starting wealth."
             "<ul>"
             "<li><b>Fundamentalists rise steadily</b> → buying cheap, selling dear works</li>"
             "<li><b>Trend followers spike then crash</b> → momentum profit is fragile</li>"
@@ -491,12 +491,16 @@ CHART_CONTENT = {
             "</ul>"
         ),
         "technical": (
-            "Mean portfolio value per strategy: "
-            "<code>W(t) = cash + position × P(t)</code>."
+            "Mean PnL per strategy: "
+            "<code>PnL(t) = (cash + position × P(t)) - W(0)</code>. "
+            "Plotted relative to initial wealth so that the zero line represents "
+            "break-even. Note: if the price drifts far from its starting value, "
+            "all groups gain or lose from inventory revaluation — this is not "
+            "trading alpha but a mark-to-market effect."
             "<ul>"
             "<li>Fundamentalists profit from mean-reversion (contrarian)</li>"
             "<li>Trend followers profit from serial correlation (momentum)</li>"
-            "<li>Relative wealth depends on market regime and parameter mix</li>"
+            "<li>Relative PnL depends on market regime and parameter mix</li>"
             "</ul>"
         ),
     },
@@ -565,7 +569,9 @@ CHART_CONTENT = {
             "<ul>"
             "<li><code>Mean PnL</code>: Average (W_T - W_0) across agents of that type</li>"
             "<li><code>Std PnL</code>: Cross-sectional dispersion</li>"
-            "<li><code>Sharpe</code>: Mean PnL / Std PnL (cross-sectional)</li>"
+            "<li><code>Sharpe (cross-sect.)</code>: Mean PnL / Std PnL — a "
+            "cross-sectional ratio measuring consistency across agents of the "
+            "same type, not a time-series Sharpe ratio</li>"
             "<li><code>Mean Wealth</code>: Average W_T for the group</li>"
             "</ul>"
         ),
@@ -835,7 +841,7 @@ def render_guide_tab():
 PRESETS = {
     "Balanced": {},
     "Mostly Noise": {
-        "frac_fundamental": 0.15, "frac_trend": 0.15,
+        "frac_fundamental": 0.20, "frac_trend": 0.15,
     },
     "Fund. Heavy": {
         "frac_fundamental": 0.60, "frac_trend": 0.20,
@@ -870,7 +876,7 @@ _SLIDERS = {
     "fundamental_sigma":      ("sigma (fundamental)",   0.01,  2.0,   DEFAULT_PARAMS["fundamental_sigma"],      0.01,  "%.2f"),
     "fundamental_sensitivity":("fund. sensitivity",     0.1,   10.0,  DEFAULT_PARAMS["fundamental_sensitivity"],0.1,   "%.1f"),
     "trend_threshold":        ("trend threshold",       0.0,   0.05,  DEFAULT_PARAMS["trend_threshold"],        0.001, "%.3f"),
-    "trend_sensitivity":      ("trend sensitivity",     1.0,   50.0,  DEFAULT_PARAMS["trend_sensitivity"],      1.0,   "%.0f"),
+    "trend_sensitivity":      ("trend sensitivity",     1.0,   50.0,  DEFAULT_PARAMS["trend_sensitivity"],      0.5,   "%.1f"),
     "stale_order_age":        ("stale order age",       1,     50,    DEFAULT_PARAMS["stale_order_age"],        1,     "%d"),
     "steps":                  ("steps",                 100,   10000, DEFAULT_PARAMS["steps"],                  100,   "%d"),
 }
@@ -999,7 +1005,7 @@ ANALYSIS_SCENARIOS = {
     "Balanced": {"frac_fundamental": 0.33, "frac_trend": 0.33},
     "Fund. Heavy": {"frac_fundamental": 0.60, "frac_trend": 0.20},
     "Trend Heavy": {"frac_fundamental": 0.20, "frac_trend": 0.60},
-    "Mostly Noise": {"frac_fundamental": 0.15, "frac_trend": 0.15},
+    "Mostly Noise": {"frac_fundamental": 0.20, "frac_trend": 0.15},
 }
 
 SENSITIVITY_CONFIGS = {
@@ -1008,6 +1014,12 @@ SENSITIVITY_CONFIGS = {
         "values": [0.0, 0.001, 0.002, 0.005, 0.008, 0.01, 0.015, 0.02, 0.03, 0.05],
         "description": "Minimum percentage return before trend followers act "
                        "(0.01 = 1%). Higher values filter out noise, reducing trend-follower activity.",
+    },
+    "trend_sensitivity": {
+        "label": "Trend Sensitivity",
+        "values": [1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0, 30.0, 50.0],
+        "description": "How aggressively trend followers react once threshold is crossed. "
+                       "Higher values increase their participation rate and amplify momentum feedback loops.",
     },
     "fundamental_sensitivity": {
         "label": "Fundamental Sensitivity",
@@ -1146,6 +1158,12 @@ a market metric measured under that composition. Key comparisons:
 - **Stylized fact pass/fail:** Shows whether each scenario produces
   return properties consistent with real financial markets. A realistic model
   should pass most tests across scenarios.
+
+**Note on "Mostly Noise":** With only 15% fundamental traders, prices can
+drift far from the fundamental value over time because there is insufficient
+corrective force. When this happens, all groups may appear to profit — this
+is a mark-to-market effect from inventory revaluation (all agents hold shares
+whose price has risen), not genuine trading alpha.
 """)
 
     st.markdown("---")
@@ -1238,7 +1256,7 @@ The dotted line shows the mean value.
 
     if st.button("Run Sensitivity Sweep", key="btn_sensitivity"):
         values = SENSITIVITY_CONFIGS[sens_param]["values"]
-        with st.spinner(f"Sweeping {sens_param} ({len(values)} values)..."):
+        with st.spinner(f"Sweeping {sens_param} ({len(values)} values × 5 seeds)..."):
             sweep_df = _run_sensitivity_cached(
                 analysis_frozen, sens_param, tuple(values))
         st.session_state["sweep_df"] = sweep_df
@@ -1314,6 +1332,26 @@ more prone to sustained sell-offs, often driven by momentum cascades.
 
             # Parameter-specific interpretation
             _PARAM_INTERPRETATIONS = {
+                "trend_sensitivity": """
+**How Trend Sensitivity affects the market:**
+
+Trend sensitivity scales the probability that a trend follower acts once
+the return exceeds the threshold. With a return of `r` and sensitivity `s`,
+the action probability is `min(|r| × s, 1.0)`.
+
+- **Low sensitivity (1–3):** Trend followers rarely participate, even during
+  large moves. The market resembles a fundamentalist-noise mix. Prices are
+  more stable but may lack realistic volatility clustering.
+
+- **High sensitivity (10–50):** Trend followers pile in aggressively,
+  amplifying small moves into large ones. This deepens fat tails (lower
+  Hill index) and can push the tail index below the realistic [2, 6] range.
+  Volatility becomes more persistent, and drawdowns deepen.
+
+The key insight: **trend sensitivity is the primary dial controlling tail
+heaviness**. Too high and the model produces unrealistically extreme
+returns; too low and it fails to generate realistic volatility clustering.
+""",
                 "trend_threshold": """
 **How Trend Threshold affects the market:**
 
@@ -1428,7 +1466,7 @@ with tab_sim:
             plt.close(fig3)
 
         # Wealth evolution
-        st.markdown("### Wealth Evolution by Strategy")
+        st.markdown("### PnL Evolution by Strategy")
         fig4, ax4 = plt.subplots(figsize=(12, 4))
         plot_wealth_evolution(data, ax=ax4)
         fig4.tight_layout()
@@ -1488,15 +1526,50 @@ with tab_sim:
         with col_d:
             pnl_df = pd.DataFrame({
                 name: {
-                    "Mean PnL": f"{m['mean_pnl']:.2f}",
+                    "Total PnL": f"{m['mean_pnl']:.2f}",
+                    "Trading PnL": f"{m['mean_trading_pnl']:.2f}",
+                    "Revaluation": f"{m['mean_revaluation_pnl']:.2f}",
                     "Std PnL": f"{m['std_pnl']:.2f}",
-                    "Sharpe": f"{m['sharpe']:.3f}",
-                    "Mean Wealth": f"{m['mean_wealth']:.2f}",
+                    "Sharpe (cross-sect.)": f"{m['sharpe']:.3f}",
                     "N Agents": m['n'],
                 }
                 for name, m in pnl_metrics.items()
             })
             st.dataframe(pnl_df, use_container_width=True)
+
+        with st.expander("How to read this table"):
+            st.markdown("""
+**Total PnL** is decomposed into two components:
+
+- **Trading PnL** — Profit or loss from active buy/sell decisions.
+  Computed as: *(final cash - initial cash) + (final inventory - initial
+  inventory) x last price*. This isolates the value created (or destroyed)
+  by the agent's strategy. Positive trading PnL means the agent's trades
+  were, on average, well-timed.
+
+- **Revaluation** — The passive mark-to-market gain or loss from holding
+  the initial inventory as the price changes. Equals: *initial inventory x
+  (last price - initial price)*. This is **identical for all agents**
+  because they all start with the same inventory. If the price ended higher
+  than it started, every group gets the same revaluation boost — this is
+  not trading skill.
+
+**Why this matters:** When the price drifts (e.g. +28%), the revaluation
+component dominates and can make every group look profitable. Trading PnL
+strips this out, revealing the true performance difference between
+strategies. Typically:
+
+- **Fundamentalists** have negative trading PnL during upward drifts
+  because they sell when price > fundamental, depleting inventory
+- **Trend followers** have positive trading PnL during sustained trends
+  but negative during reversals
+- **Noise traders** have near-zero trading PnL on average across many
+  seeds, since they trade randomly
+
+**Sharpe (cross-sect.)** is *Mean PnL / Std PnL* across agents of the
+same type — it measures how consistently agents within a group perform,
+not the time-series risk-adjusted return.
+""")
 
         # Stylized facts
         with st.expander("Stylized Facts Validation"):
