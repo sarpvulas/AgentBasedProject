@@ -32,7 +32,7 @@ def main():
 
     fig, ax = plt.subplots(figsize=(10, 3.5))
     plot_price_and_fundamental(data, ax=ax)
-    ax.set_title(f"Price vs fundamental (seed {SEED}, {len(data)} steps)")
+    ax.set_title(f"Price vs fundamental (seed {SEED}, {len(data)} observations)")
     fig.tight_layout()
     fig.savefig(OUT / "price_vs_fundamental.png", dpi=130)
     plt.close(fig)

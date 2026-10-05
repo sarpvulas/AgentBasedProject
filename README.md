@@ -13,7 +13,7 @@ Real prices show fat-tailed returns and clustered volatility, and simple models 
 
 ## Results
 
-Default parameters, 5,000 steps, seed 42 (`python scripts/make_figures.py` prints these):
+Default parameters, 5,000 steps (5,001 observations, because step 0 is recorded), seed 42 (`python scripts/make_figures.py` prints these):
 
 | Statistic | Seed 42 | 30 seeds (1-30): mean, min to max |
 |---|---|---|
@@ -26,8 +26,8 @@ What this shows:
 
 - Fat tails: yes. Excess kurtosis is positive and large in all 30 seeds. The QQ plot below shows the excess comes from the tails; the centre of the distribution is flatter than normal.
 - Volatility clustering: present but short-lived. ACF of squared returns is positive in all 30 seeds, decaying from 0.17 at lag 1 to 0.01 at lag 5 for seed 42.
-- No return autocorrelation: not reproduced. Lag-1 ACF is negative and outside the 95% band (about 0.028) in all 30 seeds, which is typical of bid-ask bounce in a book model. The built-in `no_return_autocorrelation` check passes anyway because it tests the mean of |ACF| over lags 1-5 against 3 times the band, a loose criterion.
-- Hill index around 2 is at the low end of the 2 to 5 range the code treats as plausible, using a 5% tail on only 5,000 observations; treat it as indicative.
+- No return autocorrelation: not reproduced. Lag-1 ACF is negative and outside the 95% band (about 0.028) in all 30 seeds, which is likely a bounce between resting bid and ask prices (not tested; the book is two-sided at the end of only 23.5% of steps). The built-in `no_return_autocorrelation` check passes anyway because it tests the mean of |ACF| over lags 1-5 against 3 times the band, a loose criterion.
+- Hill index around 2 is at the low end of the 2 to 6 range the code treats as plausible, using a 5% tail on only 5,001 observations; treat it as indicative.
 - The price drifts well away from the fundamental in the last 1,500 steps of seed 42 (top figure); the fundamentalist agents correct it only slowly.
 
 ![Return distribution and QQ plot, seed 42](docs/img/return_distribution.png)
@@ -109,7 +109,9 @@ Defaults from `market_abm/config.py`:
 - One asset, one unit per order, top-of-book matching only. There are no partial fills or multi-level sweeps, and the `quantity` field of an order is ignored.
 - Agents can trade with their own resting orders (0.65% of trades on seed 42), which counts as volume without changing wealth.
 - Returns are lumpy: the histogram shows a flat-topped centre with a few large jumps, so kurtosis is driven by the tails rather than a peaked centre.
-- `run_experiment` drops zero returns before computing statistics; this changes the numbers very little (kurtosis 10.84 vs 10.90 on seed 42) but is not the same series as the one the dashboard plots.
+- `run_experiment` and the dashboard drop zero returns (0.4% of steps on seed 42, 20 of 5,001) before plotting and computing statistics; the README table and figures use all returns. The effect is small (kurtosis 10.84 vs 10.90 on seed 42).
+- The stylized-facts checks in `analytics.validate_stylized_facts` are loose: volatility clustering and no-autocorrelation both use the mean of |ACF| over lags 1 to 5 against the confidence band (3 times the band for the latter), so the no-autocorrelation check passes despite a clearly negative lag-1 ACF.
+- A voided trade also consumes the aggressor's order for that step; it does not retry against the next resting order (a modelling choice). The resting order is not restored either. A latent flaw: if the aggressor were the party that failed (aggressors check cash against the last price, not the trade price), the void would still not restore the resting order. No seed tried reached this case.
 - No calibration to real market data; the "plausible range" checks are rules of thumb, not tests against data.
 - Tests cover the order book, agents, fundamental process, analytics and a model smoke/invariant run; they do not test the stylized-fact outputs statistically.
 
