@@ -25,5 +25,6 @@ DEFAULT_PARAMS = {
     'trend_sensitivity': 5.0,        # scales action probability (like fundamental_sensitivity)
 
     # Order book
+    'order_size': 1,        # units per order (agents submit this quantity)
     'stale_order_age': 10,  # max age before limit order cancellation
 }
