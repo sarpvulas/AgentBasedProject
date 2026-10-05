@@ -98,7 +98,8 @@ class MarketModel(ap.Model):
             if order is not None:
                 trade = self.order_book.submit_order(order)
                 if trade is not None:
-                    self._settle_trade(trade)
+                    if not self._settle_trade(trade):
+                        self.order_book.void_trade(trade)
                     best_bid = self.order_book.best_bid
                     best_ask = self.order_book.best_ask
 
@@ -109,15 +110,17 @@ class MarketModel(ap.Model):
         # 6. End step
         self.order_book.end_step()
 
-    def _settle_trade(self, trade):
+    def _settle_trade(self, trade) -> bool:
+        """Transfer cash and inventory; return False if either side can't cover."""
         buyer = self._agent_lookup[trade.buyer_id]
         seller = self._agent_lookup[trade.seller_id]
         if buyer.cash < trade.price or seller.inventory < 1:
-            return  # Cancel trade — agent can't cover (stale resting order)
+            return False  # agent can't cover (stale resting order)
         buyer.cash -= trade.price
         seller.cash += trade.price
         buyer.inventory += 1
         seller.inventory -= 1
+        return True
 
     def update(self):
         price = (self.order_book.last_trade_price or self._prev_price)
