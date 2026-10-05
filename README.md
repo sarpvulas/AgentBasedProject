@@ -123,3 +123,5 @@ Defaults from `market_abm/config.py`:
 ## Credits and license
 
 Built for the King's College London agent-based modelling course (MSc Computational Finance) by Sarp Vulaş (Dubai). MIT license, see [LICENSE](LICENSE).
+
+Contact: [LinkedIn](https://www.linkedin.com/in/sarpvulas/)
