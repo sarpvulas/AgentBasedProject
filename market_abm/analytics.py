@@ -64,18 +64,27 @@ def hill_estimator(returns: np.ndarray, k: int | None = None) -> float:
     return 1.0 / inv_alpha
 
 
-def validate_stylized_facts(returns: np.ndarray, nlags: int = 20) -> dict:
+def validate_stylized_facts(returns: np.ndarray, nlags: int = 20,
+                            check_lags: int = 5) -> dict:
     """Comprehensive validation of stylized facts.
 
     Checks:
     1. Fat tails: excess kurtosis > 0 and JB test rejects normality
-    2. Volatility clustering: significant ACF of |returns| at lag 1-5
-    3. No return autocorrelation: ACF(returns) at lag 1 is small
+    2. Volatility clustering: ACF of squared returns is above the 95% band at
+       lag 1 and has decayed by lag `check_lags` (lag-`check_lags` ACF below
+       lag-1 ACF)
+    3. No return autocorrelation: ACF(returns) inside the 95% band
+       (+-1.96/sqrt(n)) at EVERY lag 1..`check_lags`; failing lags are listed
     4. Approximate normality rejection via KS test
     5. Tail index in plausible range (2-6)
 
+    The per-lag test is strict: for white noise each lag fails with
+    probability 5%, so about 23% of white-noise series fail at least one of
+    five lags.
+
     Returns dict of {fact_name: {passed: bool, value: ..., criterion: ...}}.
     """
+    nlags = max(nlags, check_lags)
     stats = compute_return_statistics(returns)
     acf_data = compute_autocorrelation(returns, nlags=nlags)
     tail_idx = hill_estimator(returns)
@@ -93,23 +102,30 @@ def validate_stylized_facts(returns: np.ndarray, nlags: int = 20) -> dict:
         'criterion': 'excess kurtosis > 0 AND JB rejects normality (p < 0.05)',
     }
 
-    # 2. Volatility clustering
-    avg_abs_acf = float(np.mean(np.abs(acf_data['acf_abs_returns'][1:6])))
+    # 2. Volatility clustering (squared returns)
+    acf_sq = acf_data['acf_squared_returns']
+    sq_lag1 = float(acf_sq[1])
+    sq_last = float(acf_sq[check_lags])
     results['volatility_clustering'] = {
-        'passed': bool(avg_abs_acf > conf),
-        'avg_abs_acf_lag1_5': avg_abs_acf,
+        'passed': bool(sq_lag1 > conf and sq_last < sq_lag1),
+        'acf_squared_lag1': sq_lag1,
+        f'acf_squared_lag{check_lags}': sq_last,
         'confidence_band': float(conf),
-        'criterion': 'mean |ACF(|r|)| at lags 1-5 exceeds 95% confidence band',
+        'criterion': (f'ACF(r^2) at lag 1 above the 95% band AND ACF(r^2) at '
+                      f'lag {check_lags} below its lag-1 value (decay)'),
     }
 
-    # 3. No return autocorrelation
-    # Use mean of first 5 lags (more robust than just lag 1)
-    acf_r_mean5 = float(np.mean(np.abs(acf_data['acf_returns'][1:6])))
+    # 3. No return autocorrelation: every lag inside the band
+    acf_r = acf_data['acf_returns']
+    failing = [int(k) for k in range(1, check_lags + 1)
+               if abs(acf_r[k]) > conf]
     results['no_return_autocorrelation'] = {
-        'passed': bool(acf_r_mean5 < 3 * conf),
-        'mean_abs_acf_lag1_5': acf_r_mean5,
-        'threshold': float(3 * conf),
-        'criterion': 'mean |ACF(r)| at lags 1-5 < 3x confidence band',
+        'passed': len(failing) == 0,
+        'acf_lag1': float(acf_r[1]),
+        'failing_lags': failing,
+        'confidence_band': float(conf),
+        'criterion': (f'|ACF(r)| within the 95% band at every lag '
+                      f'1-{check_lags}'),
     }
 
     # 4. Non-normality (KS test)
@@ -242,8 +258,9 @@ def run_experiment(params: dict) -> dict:
     data = model.output.variables.MarketModel
     prices = data['price'].values
     fundamentals = data['fundamental'].values
-    all_returns = data['log_return'].values
-    returns = all_returns[all_returns != 0.0]
+    # All returns, including zeros (steps without a trade), the same series
+    # as the README table and the dashboard.
+    returns = data['log_return'].values
 
     if len(returns) < 20:
         return {'valid': False}
@@ -273,8 +290,8 @@ def run_experiment(params: dict) -> dict:
         'skewness': stats['skewness'],
         'mean_return': stats['mean'],
         'hill_index': facts['tail_index']['hill_estimate'],
-        'vol_clustering_acf': facts['volatility_clustering']['avg_abs_acf_lag1_5'],
-        'return_acf': facts['no_return_autocorrelation']['mean_abs_acf_lag1_5'],
+        'vol_clustering_acf': facts['volatility_clustering']['acf_squared_lag1'],
+        'return_acf': facts['no_return_autocorrelation']['acf_lag1'],
         'mean_spread': float(np.mean(valid_spreads)) if len(valid_spreads) > 0 else 0.0,
         'mean_abs_mispricing': mean_absolute_mispricing(prices, fundamentals),
         'max_drawdown': dd_pct,

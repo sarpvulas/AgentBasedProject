@@ -215,7 +215,7 @@ def plot_multi_seed_boxplots(seed_df: pd.DataFrame,
     labels = {
         'kurtosis': 'Excess Kurtosis',
         'hill_index': 'Hill Tail Index',
-        'vol_clustering_acf': 'ACF(|r|) Lags 1-5',
+        'vol_clustering_acf': 'ACF(r²) Lag 1',
         'volatility': 'Return Std Dev',
         'mean_abs_mispricing': 'Mean |P - F|',
         'max_drawdown': 'Max Drawdown',
