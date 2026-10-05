@@ -20,7 +20,9 @@ class MarketModel(ap.Model):
       1. Evolve fundamental value (O-U process)
       2. Shuffle agents (random arrival order)
       3. Each agent decides buy/sell/hold and submits orders
-      4. Trades settle immediately (cash and inventory transfer)
+      4. Orders match with price-time priority (skipping the agent's own
+         resting orders); each fill settles immediately, limited to what
+         both sides can cover at the trade price
       5. Cancel stale limit orders
       6. Record observables
     """
@@ -50,6 +52,7 @@ class MarketModel(ap.Model):
         self._agent_lookup = {t.id: t for t in self.traders}
         self._prev_price = self.p['fundamental_initial']
         self._interventions: dict[int, float] = {}
+        self.n_unsettled = 0  # fills voided by the settlement safety net
 
     def _assign_types(self):
         n = self.p['n_agents']
@@ -96,10 +99,10 @@ class MarketModel(ap.Model):
             order = trader.decide(price, prev_price, fundamental,
                                   best_bid, best_ask, self.t, self.rng)
             if order is not None:
-                trade = self.order_book.submit_order(order)
-                if trade is not None:
-                    if not self._settle_trade(trade):
-                        self.order_book.void_trade(trade)
+                trades = self.order_book.submit_order(
+                    order, capacity=self._capacity,
+                    settle=self._settle_trade)
+                if trades:
                     best_bid = self.order_book.best_bid
                     best_ask = self.order_book.best_ask
 
@@ -110,16 +113,25 @@ class MarketModel(ap.Model):
         # 6. End step
         self.order_book.end_step()
 
+    def _capacity(self, agent_id: int, side: str, price: float) -> int:
+        """Largest quantity the agent can settle at `price`."""
+        agent = self._agent_lookup[agent_id]
+        if side == "buy":
+            return int(agent.cash / price + 1e-9) if price > 0 else 0
+        return agent.inventory
+
     def _settle_trade(self, trade) -> bool:
         """Transfer cash and inventory; return False if either side can't cover."""
         buyer = self._agent_lookup[trade.buyer_id]
         seller = self._agent_lookup[trade.seller_id]
-        if buyer.cash < trade.price or seller.inventory < 1:
-            return False  # agent can't cover (stale resting order)
-        buyer.cash -= trade.price
-        seller.cash += trade.price
-        buyer.inventory += 1
-        seller.inventory -= 1
+        value = trade.price * trade.quantity
+        if buyer.cash < value - 1e-9 or seller.inventory < trade.quantity:
+            self.n_unsettled += 1
+            return False
+        buyer.cash -= value
+        seller.cash += value
+        buyer.inventory += trade.quantity
+        seller.inventory -= trade.quantity
         return True
 
     def update(self):

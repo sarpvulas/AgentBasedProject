@@ -133,3 +133,108 @@ class TestPortfolioMetrics:
         ]
         result = compute_portfolio_metrics(agents, AgentType.NOISE, 100.0)
         assert result['sharpe'] == pytest.approx(0.0)
+
+
+def _ar1(phi, n, seed):
+    rng = np.random.default_rng(seed)
+    eps = rng.normal(0, 0.01, n)
+    x = np.zeros(n)
+    for i in range(1, n):
+        x[i] = phi * x[i - 1] + eps[i]
+    return x
+
+
+def _arch(n, seed, a0=1e-5, a1=0.6):
+    rng = np.random.default_rng(seed)
+    x = np.zeros(n)
+    for i in range(1, n):
+        x[i] = np.sqrt(a0 + a1 * x[i - 1] ** 2) * rng.normal()
+    return x
+
+
+class TestPerLagAutocorrelationCheck:
+    def test_white_noise_passes(self):
+        res = validate_stylized_facts(
+            np.random.default_rng(3).normal(0, 0.01, 5000))
+        assert res['no_return_autocorrelation']['passed']
+        assert res['no_return_autocorrelation']['failing_lags'] == []
+
+    def test_white_noise_pass_rate_matches_nominal_level(self):
+        # Five independent 5% lag tests: about 77% of white-noise series pass.
+        passes = [
+            validate_stylized_facts(
+                np.random.default_rng(s).normal(0, 0.01, 5000)
+            )['no_return_autocorrelation']['passed']
+            for s in range(200)
+        ]
+        assert 0.65 < np.mean(passes) < 0.88
+
+    def test_negative_ar1_fails_and_reports_lag(self):
+        # The old mean-|ACF| over 5 lags against 3x the band passed this.
+        res = validate_stylized_facts(_ar1(-0.15, 5000, seed=1))
+        r = res['no_return_autocorrelation']
+        assert not r['passed']
+        assert 1 in r['failing_lags']
+        assert r['acf_lag1'] < -r['confidence_band']
+
+    def test_positive_ar1_fails(self):
+        res = validate_stylized_facts(_ar1(0.3, 3000, seed=2))
+        assert not res['no_return_autocorrelation']['passed']
+        assert 1 in res['no_return_autocorrelation']['failing_lags']
+
+
+class TestVolatilityClusteringCheck:
+    def test_arch_series_shows_clustering(self):
+        res = validate_stylized_facts(_arch(5000, seed=5))
+        vc = res['volatility_clustering']
+        assert vc['passed']
+        assert vc['acf_squared_lag1'] > vc['confidence_band']
+        assert vc['acf_squared_lag5'] < vc['acf_squared_lag1']
+
+    def test_white_noise_has_no_clustering(self):
+        res = validate_stylized_facts(
+            np.random.default_rng(3).normal(0, 0.01, 5000))
+        assert not res['volatility_clustering']['passed']
+
+
+class TestRunExperimentUsesAllReturns:
+    def test_volatility_matches_all_returns_including_zeros(self):
+        from market_abm.analytics import run_experiment
+        from market_abm.config import DEFAULT_PARAMS
+        from market_abm.model import MarketModel
+        params = {**DEFAULT_PARAMS, 'steps': 400, 'n_agents': 8, 'seed': 3}
+        model = MarketModel(params)
+        model.run()
+        r = model.output.variables.MarketModel['log_return'].values
+        assert (r == 0.0).sum() > 0, "scenario must contain zero returns"
+        out = run_experiment(params)
+        assert out['volatility'] == pytest.approx(float(np.std(r)))
+
+
+class TestValidateStylizedFactsBadInput:
+    def test_nan_input_raises(self):
+        r = np.random.default_rng(0).normal(0, 0.01, 500)
+        r[10] = np.nan
+        with pytest.raises(ValueError, match="NaN"):
+            validate_stylized_facts(r)
+
+    def test_inf_input_raises(self):
+        r = np.random.default_rng(0).normal(0, 0.01, 500)
+        r[10] = np.inf
+        with pytest.raises(ValueError, match="infinite"):
+            validate_stylized_facts(r)
+
+    def test_constant_input_raises(self):
+        with pytest.raises(ValueError, match="zero variance"):
+            validate_stylized_facts(np.zeros(500))
+
+    def test_too_short_input_raises_value_error_not_index_error(self):
+        with pytest.raises(ValueError, match="at least"):
+            validate_stylized_facts(np.array([0.01, -0.02, 0.01]))
+        with pytest.raises(ValueError, match="at least"):
+            validate_stylized_facts(np.random.default_rng(0).normal(size=6))
+
+    def test_short_but_valid_series_still_works(self):
+        res = validate_stylized_facts(
+            np.random.default_rng(1).normal(0, 0.01, 15))
+        assert 'no_return_autocorrelation' in res
