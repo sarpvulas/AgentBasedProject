@@ -180,3 +180,37 @@ class TestEndStep:
         ob.end_step()
         ob.end_step()
         assert ob.volume_history == [1, 0]
+
+
+class TestVoidTrade:
+    def _cross(self, ob, price, ts):
+        ob.submit_order(Order(agent_id=1, side="sell", order_type="limit",
+                              price=price, timestamp=ts))
+        return ob.submit_order(Order(agent_id=2, side="buy",
+                                     order_type="market", price=0.0,
+                                     timestamp=ts))
+
+    def test_void_restores_initial_price_and_volume(self):
+        ob = OrderBook(initial_price=100.0)
+        trade = self._cross(ob, 105.0, 1)
+        assert ob.last_trade_price == 105.0
+        ob.void_trade(trade)
+        assert ob.last_trade_price == 100.0
+        assert ob.trade_history == []
+        ob.end_step()
+        assert ob.volume_history == [0]
+
+    def test_void_restores_previous_trade_price(self):
+        ob = OrderBook(initial_price=100.0)
+        self._cross(ob, 101.0, 1)
+        trade = self._cross(ob, 107.0, 2)
+        ob.void_trade(trade)
+        assert ob.last_trade_price == 101.0
+        assert len(ob.trade_history) == 1
+
+    def test_void_rejects_non_latest_trade(self):
+        ob = OrderBook(initial_price=100.0)
+        first = self._cross(ob, 101.0, 1)
+        self._cross(ob, 102.0, 2)
+        with pytest.raises(ValueError):
+            ob.void_trade(first)

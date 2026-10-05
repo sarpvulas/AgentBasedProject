@@ -6,6 +6,7 @@ import pytest
 from market_abm.agents import AgentType
 from market_abm.config import DEFAULT_PARAMS
 from market_abm.model import MarketModel
+from market_abm.order_book import Order, Trade
 
 
 class TestMarketModelSetup:
@@ -124,3 +125,48 @@ class TestMarketModelRun:
         with pytest.raises(ValueError, match=r"> 1\.0"):
             model = MarketModel(params)
             model.run()
+
+
+class TestUnsettledTrades:
+    def test_unsettled_trade_does_not_move_price_or_volume(self):
+        model = MarketModel({**DEFAULT_PARAMS, 'steps': 1, 'n_agents': 4})
+        model.setup()
+        broke, seller = model.traders[0], model.traders[1]
+        broke.cash = 0.0
+        ob = model.order_book
+        ob.submit_order(Order(seller.id, "sell", "limit", 150.0, 1, 0))
+        trade = ob.submit_order(Order(broke.id, "buy", "market", 0.0, 1, 0))
+        assert isinstance(trade, Trade)
+        assert not model._settle_trade(trade)
+        ob.void_trade(trade)
+        assert ob.last_trade_price == DEFAULT_PARAMS['fundamental_initial']
+        assert len(ob.trade_history) == 0
+
+    @pytest.mark.parametrize('seed', [1, 2])
+    def test_trade_history_replays_to_final_portfolios(self, seed):
+        # Seeds 1 and 2 produced unsettleable trades before the void fix;
+        # every trade left in the history must therefore have moved cash
+        # and inventory exactly once.
+        model = MarketModel({**DEFAULT_PARAMS, 'seed': seed})
+        model.run()
+        cash = {t.id: DEFAULT_PARAMS['initial_cash'] for t in model.traders}
+        inv = {t.id: DEFAULT_PARAMS['initial_inventory']
+               for t in model.traders}
+        for tr in model.order_book.trade_history:
+            cash[tr.buyer_id] -= tr.price
+            cash[tr.seller_id] += tr.price
+            inv[tr.buyer_id] += 1
+            inv[tr.seller_id] -= 1
+        for t in model.traders:
+            assert t.cash == pytest.approx(cash[t.id])
+            assert t.inventory == inv[t.id]
+
+
+class TestDeterminism:
+    def test_same_seed_same_prices(self):
+        params = {**DEFAULT_PARAMS, 'steps': 200, 'seed': 7}
+        a = MarketModel(params)
+        b = MarketModel(params)
+        pa = a.run().variables.MarketModel['price'].values
+        pb = b.run().variables.MarketModel['price'].values
+        assert np.array_equal(pa, pb)

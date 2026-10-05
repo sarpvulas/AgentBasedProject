@@ -42,7 +42,7 @@ def hill_estimator(returns: np.ndarray, k: int | None = None) -> float:
 
     Uses the largest k order statistics of |returns|.
     A lower tail index means heavier tails (power-law exponent).
-    Typical financial data: 2-5.
+    Typical financial data: 2-5 (the stylized-facts check accepts 2-6).
 
     Parameters
     ----------
