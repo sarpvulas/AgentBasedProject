@@ -82,9 +82,25 @@ def validate_stylized_facts(returns: np.ndarray, nlags: int = 20,
     probability 5%, so about 23% of white-noise series fail at least one of
     five lags.
 
+    The KS test standardizes with the sample mean and standard deviation,
+    which makes its p-values too lenient (a Lilliefors-type correction would
+    be stricter); read it as indicative.
+
+    Raises ValueError for fewer than max(check_lags + 2, 12) returns,
+    non-finite values, or zero variance.
+
     Returns dict of {fact_name: {passed: bool, value: ..., criterion: ...}}.
     """
-    nlags = max(nlags, check_lags)
+    returns = np.asarray(returns, dtype=float)
+    min_len = max(check_lags + 2, 12)
+    if len(returns) < min_len:
+        raise ValueError(
+            f"need at least {min_len} returns, got {len(returns)}")
+    if not np.all(np.isfinite(returns)):
+        raise ValueError("returns contain NaN or infinite values")
+    if np.std(returns) == 0:
+        raise ValueError("returns have zero variance; ACF is undefined")
+    nlags = min(max(nlags, check_lags), len(returns) - 1)
     stats = compute_return_statistics(returns)
     acf_data = compute_autocorrelation(returns, nlags=nlags)
     tail_idx = hill_estimator(returns)
