@@ -142,16 +142,24 @@ class TestUnsettledTrades:
         assert ob.last_trade_price == DEFAULT_PARAMS['fundamental_initial']
         assert len(ob.trade_history) == 0
 
-    def test_every_recorded_trade_settled(self):
-        model = MarketModel({**DEFAULT_PARAMS, 'steps': 300, 'seed': 1})
+    @pytest.mark.parametrize('seed', [1, 2])
+    def test_trade_history_replays_to_final_portfolios(self, seed):
+        # Seeds 1 and 2 produced unsettleable trades before the void fix;
+        # every trade left in the history must therefore have moved cash
+        # and inventory exactly once.
+        model = MarketModel({**DEFAULT_PARAMS, 'seed': seed})
         model.run()
-        # Wealth conservation: cash and inventory totals never change.
-        assert sum(t.cash for t in model.traders) == pytest.approx(
-            DEFAULT_PARAMS['initial_cash'] * DEFAULT_PARAMS['n_agents'])
-        assert sum(t.inventory for t in model.traders) == (
-            DEFAULT_PARAMS['initial_inventory'] * DEFAULT_PARAMS['n_agents'])
-        assert min(t.cash for t in model.traders) >= 0
-        assert min(t.inventory for t in model.traders) >= 0
+        cash = {t.id: DEFAULT_PARAMS['initial_cash'] for t in model.traders}
+        inv = {t.id: DEFAULT_PARAMS['initial_inventory']
+               for t in model.traders}
+        for tr in model.order_book.trade_history:
+            cash[tr.buyer_id] -= tr.price
+            cash[tr.seller_id] += tr.price
+            inv[tr.buyer_id] += 1
+            inv[tr.seller_id] -= 1
+        for t in model.traders:
+            assert t.cash == pytest.approx(cash[t.id])
+            assert t.inventory == inv[t.id]
 
 
 class TestDeterminism:
