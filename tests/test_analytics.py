@@ -209,3 +209,32 @@ class TestRunExperimentUsesAllReturns:
         assert (r == 0.0).sum() > 0, "scenario must contain zero returns"
         out = run_experiment(params)
         assert out['volatility'] == pytest.approx(float(np.std(r)))
+
+
+class TestValidateStylizedFactsBadInput:
+    def test_nan_input_raises(self):
+        r = np.random.default_rng(0).normal(0, 0.01, 500)
+        r[10] = np.nan
+        with pytest.raises(ValueError, match="NaN"):
+            validate_stylized_facts(r)
+
+    def test_inf_input_raises(self):
+        r = np.random.default_rng(0).normal(0, 0.01, 500)
+        r[10] = np.inf
+        with pytest.raises(ValueError, match="infinite"):
+            validate_stylized_facts(r)
+
+    def test_constant_input_raises(self):
+        with pytest.raises(ValueError, match="zero variance"):
+            validate_stylized_facts(np.zeros(500))
+
+    def test_too_short_input_raises_value_error_not_index_error(self):
+        with pytest.raises(ValueError, match="at least"):
+            validate_stylized_facts(np.array([0.01, -0.02, 0.01]))
+        with pytest.raises(ValueError, match="at least"):
+            validate_stylized_facts(np.random.default_rng(0).normal(size=6))
+
+    def test_short_but_valid_series_still_works(self):
+        res = validate_stylized_facts(
+            np.random.default_rng(1).normal(0, 0.01, 15))
+        assert 'no_return_autocorrelation' in res
