@@ -30,7 +30,8 @@ What this shows:
 - Volatility clustering: weak and irregular, not a clean decay. ACF of squared returns is positive at lag 1 in all 30 seeds but above the 95% band (about 0.028) in 24. The check (lag-1 ACF of squared returns above the band and lower at lag 5) passes in 20 of 30 seeds. Seed 42 fails it: its lag-1 value is 0.022 (inside the band), then 0.125, 0.108, 0.029, 0.043 at lags 2 to 5, while ACF of absolute returns is above the band at all of lags 1 to 5 (0.049, 0.076, 0.086, 0.032, 0.041).
 - No return autocorrelation: not reproduced. The per-lag check (every lag 1 to 5 inside the 95% band) passes in 0 of 30 seeds. Lag-1 ACF is negative and outside the band in all 30 seeds; lags 1 and 2 fail in all 30, lag 3 in 26, lag 4 in 17, lag 5 in 15. A bounce between resting bid and ask prices is a plausible cause (not tested; the book is two-sided at the end of only 23.8% of steps on seed 42).
 - Hill index around 2 is at the low end of the 2 to 6 range the code treats as plausible (the check passes in 17 of 30 seeds), using a 5% tail on only 5,001 observations; treat it as indicative.
-- The price tracks the fundamental closely in this version: mean absolute gap between price and fundamental is 1.88 on seed 42 (30 seeds: mean 2.82, 1.73 to 24.1; one seed is far above the rest).
+- The price tracks the fundamental closely in 29 of 30 seeds (mean absolute gap 1.88 on seed 42; 30-seed mean 2.82, range 1.73 to 24.1), with seed 17 as the exception (mean gap 24, price up to 176).
+- Thin-book mechanics probably drive the extreme tails. The book is two-sided at the end of only about 24% of steps, and single jumps through stale far quotes dominate the largest returns. In seed 16 (kurtosis 48.4) the largest returns are single moves of 13 to 17%, for example 94.07 to 107.52 after a step with a spread of 19.13; removing the largest return still leaves kurtosis 37.3. The same mechanism may also explain the negative lag-1 ACF (untested).
 
 ![Return distribution and QQ plot, seed 42](docs/img/return_distribution.png)
 
@@ -74,7 +75,7 @@ Stack: Python 3.12, AgentPy, NumPy, pandas, SciPy, statsmodels, Matplotlib, Stre
 ```bash
 pip install -r requirements.txt
 streamlit run app.py          # dashboard
-pytest tests/ -q              # tests (95 at the time of writing)
+pytest tests/ -q              # tests (100 at the time of writing)
 python scripts/make_figures.py
 ```
 
@@ -104,7 +105,7 @@ Defaults from `market_abm/config.py`:
 ## Reproducibility
 
 - One seed (`seed`, default 42) drives a single NumPy `Generator` used for the fundamental, agent types, arrival order and all agent decisions. The same seed and parameters give identical price paths (covered by `test_same_seed_same_prices`).
-- Results above were produced with AgentPy 0.1.5, NumPy 2.4.4, pandas 3.0.3, SciPy 1.17.0 and statsmodels 0.14.0 on Python 3.12.2. `requirements.txt` only gives lower bounds, so other versions may differ.
+- Results above were produced with AgentPy 0.1.5, NumPy 2.4.4, pandas 3.0.3, SciPy 1.17.0 and statsmodels 0.14.0 on Python 3.12.2. An independent review on a fresh install (NumPy 2.5.3, pandas 3.0.6, SciPy 1.18.1, statsmodels 0.15.0) reproduced identical numbers. `requirements.txt` only gives lower bounds, so other versions may differ.
 - The 30-seed numbers use seeds 1 to 30 with default parameters.
 - Defaults changed in the matching fixes, so seed-42 paths from earlier versions of this repo are not reproduced. With `order_size = 1`, what changed: agents no longer match their own resting orders; aggressors are limited to what they can pay or deliver at the actual trade price instead of the last price; a resting order whose owner can no longer cover it is removed instead of consuming the aggressor's order for the step; a limit order that would cross only the agent's own resting order is dropped instead of rested. Earlier numbers (seed 42 / 30-seed mean) were: kurtosis 10.9 / 12.6, lag-1 ACF of returns -0.092 / -0.071, lag-1 ACF of squared returns 0.172 / 0.068, Hill 2.09 / 2.08, self-trades 0.65% of trades.
 
@@ -112,9 +113,9 @@ Defaults from `market_abm/config.py`:
 
 - One asset. Orders carry a quantity, sweep several price levels and fill partially, but every agent submits the same fixed `order_size` (default 1), so no partial fill can occur at default settings. Partial fills, multi-level sweeps and capacity limits are covered by tests with larger sizes, not by the headline results.
 - Resting limit orders do not reserve cash or inventory. An owner who has spent the cash by the time the order is hit has the order removed rather than filled.
-- A limit order that would cross only the agent's own resting order is dropped instead of rested. This keeps the book uncrossed but is a modelling choice, not market practice (venues usually cancel or reduce one of the two orders).
+- A limit order that would cross only the agent's own resting order is dropped instead of rested. This keeps the book uncrossed but is a modelling choice, not market practice (venues usually cancel or reduce one of the two orders). A market order behaves differently: it skips the agent's own order and keeps trading against the next one.
 - Returns are lumpy: the histogram shows a flat-topped centre with a few large jumps, so kurtosis is driven by the tails rather than a peaked centre.
-- The stylized-fact checks are strict or approximate in places. The per-lag return check tests five lags at 5% each, so even white noise fails at least one lag in about 23% of series (tested). The confidence band for squared returns is the same `1.96/sqrt(n)` band, which is approximate for a non-Gaussian series.
+- The stylized-fact checks are strict or approximate in places. The per-lag return check tests five lags at 5% each, so even white noise fails at least one lag in about 23% of series (tested). The confidence band for squared returns is the same `1.96/sqrt(n)` band, which is approximate for a non-Gaussian series. The KS normality test standardizes with sample parameters, so its p-values are too lenient. `validate_stylized_facts` raises `ValueError` for non-finite, constant or very short input instead of returning a vacuous pass.
 - No calibration to real market data; the "plausible range" checks are rules of thumb, not tests against data.
 - Tests check the checks on synthetic series (white noise, AR(1), ARCH) and the model's conservation and matching rules; they do not assert the stylized-fact outputs of the model itself.
 - Notebook 04 needs SALib; with SALib 1.5.1 and pandas 3 the parameter names must be a NumPy array (done in the notebook). The notebooks were re-run end to end on the current model after the changes, but their outputs are not stored.
