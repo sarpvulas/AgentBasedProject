@@ -33,6 +33,7 @@ class OrderBook:
     def __init__(self, initial_price: float | None = None):
         self.bids: list[Order] = []
         self.asks: list[Order] = []
+        self._initial_price = initial_price
         self.last_trade_price: float | None = initial_price
         self.trade_history: list[Trade] = []
         self.price_history: list[float | None] = []
@@ -108,6 +109,21 @@ class OrderBook:
         self.last_trade_price = trade.price
         self.trade_history.append(trade)
         self._step_trades.append(trade)
+
+    def void_trade(self, trade: Trade):
+        """Remove a trade that could not be settled (the most recent one).
+
+        Restores last_trade_price to the previous executed trade (or the
+        initial price) so unsettled trades never reach price or volume.
+        """
+        if not self.trade_history or self.trade_history[-1] is not trade:
+            raise ValueError("can only void the most recent trade")
+        self.trade_history.pop()
+        if self._step_trades and self._step_trades[-1] is trade:
+            self._step_trades.pop()
+        self.last_trade_price = (self.trade_history[-1].price
+                                 if self.trade_history
+                                 else self._initial_price)
 
     def cancel_stale_orders(self, current_step: int, max_age: int):
         self.bids = [o for o in self.bids

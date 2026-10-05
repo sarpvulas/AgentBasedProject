@@ -6,6 +6,7 @@ import pytest
 from market_abm.agents import AgentType
 from market_abm.config import DEFAULT_PARAMS
 from market_abm.model import MarketModel
+from market_abm.order_book import Order, Trade
 
 
 class TestMarketModelSetup:
@@ -124,3 +125,40 @@ class TestMarketModelRun:
         with pytest.raises(ValueError, match=r"> 1\.0"):
             model = MarketModel(params)
             model.run()
+
+
+class TestUnsettledTrades:
+    def test_unsettled_trade_does_not_move_price_or_volume(self):
+        model = MarketModel({**DEFAULT_PARAMS, 'steps': 1, 'n_agents': 4})
+        model.setup()
+        broke, seller = model.traders[0], model.traders[1]
+        broke.cash = 0.0
+        ob = model.order_book
+        ob.submit_order(Order(seller.id, "sell", "limit", 150.0, 1, 0))
+        trade = ob.submit_order(Order(broke.id, "buy", "market", 0.0, 1, 0))
+        assert isinstance(trade, Trade)
+        assert not model._settle_trade(trade)
+        ob.void_trade(trade)
+        assert ob.last_trade_price == DEFAULT_PARAMS['fundamental_initial']
+        assert len(ob.trade_history) == 0
+
+    def test_every_recorded_trade_settled(self):
+        model = MarketModel({**DEFAULT_PARAMS, 'steps': 300, 'seed': 1})
+        model.run()
+        # Wealth conservation: cash and inventory totals never change.
+        assert sum(t.cash for t in model.traders) == pytest.approx(
+            DEFAULT_PARAMS['initial_cash'] * DEFAULT_PARAMS['n_agents'])
+        assert sum(t.inventory for t in model.traders) == (
+            DEFAULT_PARAMS['initial_inventory'] * DEFAULT_PARAMS['n_agents'])
+        assert min(t.cash for t in model.traders) >= 0
+        assert min(t.inventory for t in model.traders) >= 0
+
+
+class TestDeterminism:
+    def test_same_seed_same_prices(self):
+        params = {**DEFAULT_PARAMS, 'steps': 200, 'seed': 7}
+        a = MarketModel(params)
+        b = MarketModel(params)
+        pa = a.run().variables.MarketModel['price'].values
+        pb = b.run().variables.MarketModel['price'].values
+        assert np.array_equal(pa, pb)
