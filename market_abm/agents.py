@@ -26,6 +26,9 @@ class Trader(ap.Agent):
         init_price = p.get('fundamental_initial', 100.0)
         self.initial_wealth: float = self.cash + self.inventory * init_price
 
+    def _size(self) -> int:
+        return int(self.model.p.get('order_size', 1))
+
     def decide(self, price: float, prev_price: float | None,
                fundamental: float, best_bid: float | None,
                best_ask: float | None, step: int,
@@ -54,7 +57,7 @@ class Trader(ap.Agent):
 
         if rng.random() < 0.5:
             return Order(agent_id=self.id, side=side, order_type="market",
-                         price=0.0, quantity=1, timestamp=step)
+                         price=0.0, quantity=self._size(), timestamp=step)
         else:
             spread = ((best_ask - best_bid)
                       if (best_bid is not None and best_ask is not None)
@@ -63,7 +66,7 @@ class Trader(ap.Agent):
             jitter = rng.uniform(-spread, spread)
             limit_price = max(0.01, price + jitter)
             return Order(agent_id=self.id, side=side, order_type="limit",
-                         price=round(limit_price, 2), quantity=1,
+                         price=round(limit_price, 2), quantity=self._size(),
                          timestamp=step)
 
     def _fundamental_decide(self, price, fundamental, step, rng):
@@ -90,11 +93,11 @@ class Trader(ap.Agent):
                 limit_price = price - rng.uniform(0, 1) * (price - fundamental)
             limit_price = max(0.01, limit_price)
             return Order(agent_id=self.id, side=side, order_type="limit",
-                         price=round(limit_price, 2), quantity=1,
+                         price=round(limit_price, 2), quantity=self._size(),
                          timestamp=step)
         else:
             return Order(agent_id=self.id, side=side, order_type="market",
-                         price=0.0, quantity=1, timestamp=step)
+                         price=0.0, quantity=self._size(), timestamp=step)
 
     def _trend_decide(self, price, prev_price, step, rng):
         if prev_price is None or prev_price <= 0 or price <= 0:
@@ -124,7 +127,7 @@ class Trader(ap.Agent):
 
         if rng.random() < 0.8:
             return Order(agent_id=self.id, side=side, order_type="market",
-                         price=0.0, quantity=1, timestamp=step)
+                         price=0.0, quantity=self._size(), timestamp=step)
         else:
             if side == "buy":
                 limit_price = price * 1.001
@@ -132,4 +135,4 @@ class Trader(ap.Agent):
                 limit_price = price * 0.999
             return Order(agent_id=self.id, side=side, order_type="limit",
                          price=round(max(0.01, limit_price), 2),
-                         quantity=1, timestamp=step)
+                         quantity=self._size(), timestamp=step)
