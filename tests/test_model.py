@@ -128,19 +128,21 @@ class TestMarketModelRun:
 
 
 class TestUnsettledTrades:
-    def test_unsettled_trade_does_not_move_price_or_volume(self):
+    def test_void_trade_safety_net_restores_resting_order(self):
         model = MarketModel({**DEFAULT_PARAMS, 'steps': 1, 'n_agents': 4})
         model.setup()
         broke, seller = model.traders[0], model.traders[1]
         broke.cash = 0.0
         ob = model.order_book
         ob.submit_order(Order(seller.id, "sell", "limit", 150.0, 1, 0))
-        trade = ob.submit_order(Order(broke.id, "buy", "market", 0.0, 1, 0))
-        assert isinstance(trade, Trade)
-        assert not model._settle_trade(trade)
-        ob.void_trade(trade)
+        # No capacity pre-check here, so the fill happens and settlement fails.
+        trades = ob.submit_order(Order(broke.id, "buy", "market", 0.0, 1, 0),
+                                 settle=model._settle_trade)
+        assert trades == []
         assert ob.last_trade_price == DEFAULT_PARAMS['fundamental_initial']
         assert len(ob.trade_history) == 0
+        assert [o.agent_id for o in ob.asks] == [seller.id]
+        assert ob.asks[0].quantity == 1
 
     @pytest.mark.parametrize('seed', [1, 2])
     def test_trade_history_replays_to_final_portfolios(self, seed):
